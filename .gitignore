@@ -31,3 +31,9 @@ gm/image_generation/ref_images/archive/
 # paid-API approval: encrypted key + the pending-request handshake
 .api-key.enc
 .api-request
+
+# Skills live in skills/ as repo content. These are per-tool install locations —
+# symlink or copy from skills/ into whichever your agent reads. Never committed, so
+# each user chooses global (~/.claude/skills/) or per-project placement.
+.claude/
+.agents/

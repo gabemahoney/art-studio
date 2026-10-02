@@ -53,8 +53,8 @@ Every file here is one of two kinds:
   assessment on that receipt afterwards, `promote.py` approves a candidate into
   `reference.png` / `final.png` with provenance. Stdlib only; see
   the Tooling section of `rules.md`. Nothing here is generated any other way.
-- **`.claude/skills/art-studio`** — the agent workflow that drives `bin/`.
-  `.agents/skills/create_asset` and `.agents/skills/illustrate` are the older
+- **`skills/art-studio`** — the agent workflow that drives `bin/`.
+  `skills/create_asset` and `skills/illustrate` are the older
   Codex-format versions; they predate `bin/` and still describe the by-hand
   procedure, so `rules.md` and `bin/` win wherever they disagree.
 

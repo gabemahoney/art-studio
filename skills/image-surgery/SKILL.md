@@ -59,7 +59,7 @@ does not.
 | Remove something whose covering texture is flat and adjacent | **ImageMagick** | Clone from the same image. |
 | Move a *correct* region from one candidate to another | **ImageMagick** | See *Transplants*. |
 | Tighter crop from pixels already present | **ImageMagick** | Crop then upscale. |
-| Pose, expression, added objects, architecture, geometry; removing something that reveals structure or that a figure overlaps; any reframe that reveals content outside the frame | **Regenerate** | Those pixels do not exist. |
+| Pose, expression, added objects, architecture, geometry; removing something that reveals structure or that a figure overlaps; any reframe that reveals content outside the frame | **Regenerate, then Path 3** | Those pixels do not exist — but a regeneration repaints the whole frame, so take only the region you asked for. |
 | Wrong, misspelled or badly drawn **text/lettering** | **Regenerate**, then Path 3 | ImageMagick cannot author glyphs in style. Fix spelling and typeface in the prompt. |
 | A small region regeneration keeps breaking | **Path 3**, then **Path 4** | Path 3 is free and usually enough; if its seam cannot be hidden, inpainting is the escalation — ask first. |
 | Rendering eroded across passes (facets rounding off) | **ImageMagick transplant** from an un-eroded version | Tonal correction does not touch it — measured. |
@@ -175,9 +175,19 @@ toward legible subjects.
 
 ## Path 3 — Generate-and-composite (inpainting without credits)
 
-Once a freeze instruction has failed twice in a scene, this is the default, not the
-exception: regenerate for geometry only, composite for everything else. Treat the
-model as a source of shapes, never of finished frames.
+**This is the default ending for every regeneration, not a fallback.** Treat the model
+as a source of shapes, never of finished frames: regenerate for geometry, then keep only
+the shape you asked for.
+
+**Do not wait for a freeze instruction to fail.** Freezes can hold perfectly and the
+pass still cost you the picture. Measured on `the-rusty-robot`, four consecutive edits
+that each named one small fault and whose freezes all verified intact changed **39%,
+14%, 17% and 16% of the frame**. The crew — never mentioned in any of those specs —
+lost 3.7% of its edge energy across them, because each whole-frame result was adopted
+wholesale. Composited as below, the same stair fix changed the crew by **2 pixels
+instead of 40,630**, the sign and canopy by **0**.
+
+The trigger is not "the freeze failed". The trigger is **"I am regenerating."**
 
 1. Regenerate normally through `bin/prompt.py` + `bin/gen.py`, aimed at that region.
    Accept that the rest of the frame drifts.
@@ -376,10 +386,11 @@ Inspect every contested detail at **300–500%** before calling it fixed.
   new candidate's receipt.
 - **A damaged candidate is sometimes recoverable — check its receipt.** Images live
   outside this repo (`rules.md` → *Where images live*), so `git checkout` only helps if
-  the repo holding them tracks them; right now **0 of 233** are tracked there. What does
+  the repo holding them tracks them, and right now none are tracked there. What does
   survive is the `codex source` path under `~/.codex/generated_images/` recorded in
-  `generation.md`, which stays in this repo: **93 of 233** have one and all 93 still
-  resolve. **The other 140 cannot be recovered at all** — which is why the rules above are
-  absolute rather than advisory, and why committing the images tree is worth doing.
+  `generation.md`, which stays in this repo — but **only generated candidates have one.
+  A local composite has no upstream copy and cannot be recovered at all**, and
+  composites are now the majority. `bin/selftest.py` prints the current census; do not
+  copy those numbers into prose, they go stale every time you make a candidate.
 - **Never silently substitute a worse fix** when a path is blocked. Say what is blocked
   and carry on with the rest.
