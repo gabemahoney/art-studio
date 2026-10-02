@@ -1,0 +1,12 @@
+Original filename: reference-angular-v1.png (sidecar: prompt-angular-v1.md)
+
+# sion — angular painted candidate
+
+Generated with the built-in image generation tool. Existing reference.png remains selected.
+
+Inputs: supplied cockpit image (style); existing reference.png (design).
+
+Use case: stylized-concept. Create a landscape character reference sheet with four complete full-body views across the upper two thirds: front, three-quarter, anatomical left profile facing left, back; four large bust expression portraits below: focused, modest/wry smile, thoughtful downward gaze, concerned. Consistent scale, neutral standing poses, ample margins, plain muted gray painted background, no text or height chart. IMAGE 1 IS THE AUTHORITATIVE STYLE TARGET: match its strongly stylized angular gouache painting precisely, broad flat interlocking ochre-lit color planes, chiseled simplified facial shapes, visible coarse dry-brush scumbling and broken pigment throughout, dark slate shadow masses, restrained detail, warm muted palette, matte printed storybook illustration. Do not smooth the paint, do not render realistic skin, gradients, glossy 3D, fine hair strands, or detailed realistic faces. IMAGE 2 supplies the character's identity, anatomy, clothing, equipment and unseen lower-body/back details ONLY, never its smoother realistic rendering. Bring the face toward the matching character in image 1 while retaining identity. This is a style translation of the character sheet into the exact cockpit illustration style. Only depict the named character. Sion is the woman at right in image 1. Young adult woman with warm medium skin, broad chin and slightly square jaw, full lips, dark shoulder-length side-swept hair. Large dark goggles with opaque ruby-red mirrored lenses fully conceal eyes and eyebrows: solid red painted planes with broad pale diagonal reflection, NO eye shapes visible. Ochre worn jacket with natural RIGHT arm sleeved; anatomical LEFT arm fully robotic exposed from shoulder to five-fingered hand, gray metal shells, dark joints, restrained brass fittings. Robotic arm viewer-right from front, viewer-left from back. Teal short scarf over black shirt, charcoal cargo pants and sleek black low-heel boots. Thin charcoal beveled hard-shell backpack with two straps, 4–5cm deep, flush mechanical details, transverse ridge two-thirds down its back, no extra pouches. Preserve slim human proportions. Emotions expressed through mouth and head angle.
+
+
+

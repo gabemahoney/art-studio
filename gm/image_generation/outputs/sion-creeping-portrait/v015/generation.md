@@ -1,0 +1,44 @@
+# Sion creeping portrait — v015
+
+## User request
+Looks good. What is this grey blob where the arrow is pointing? I think it is an artifact that should be remove. Also, the backpack would not be visible from this angle.
+
+Follow-up: screenshot /Users/gmahoney/Screenshots/Screenshot 2026-09-13 at 16.35.22.png identifies gray protrusion behind natural right elbow at viewer-left edge.
+
+## Run
+- Mode: local removal of backpack body and stray elbow-side gray shape against approved v014 baseline.
+- Style version: v2.
+- Tool: built-in image_gen; model not exposed.
+- Character: Sion description v1; backpack hidden by angle, front straps retained.
+- Image 1 STYLE: gm/image_generation/ref_images/style_references/canonical_style_reference.png (style v2; frozen at gm/image_generation/style_versions/canonical_style_reference-v2.png).
+- Image 2 EDIT TARGET: gm/image_generation/outputs/sion-creeping-portrait/v014/image.png, which contained the user's red arrow annotation at generation time. Prompt removes annotation too.
+- Output generated 1122 × 1402; trimmed one pixel per edge using sips to exact 1120 × 1400 (4:5).
+
+## Exact prompt
+
+Hand-painted flat angular matte gouache illustration in the manner of late-1970s
+TSR tabletop-RPG interior art (Star Frontiers, early Dungeons & Dragons) — poster
+paint, not digital illustration. Build every form from a few large flat opaque
+color planes with hard edges. Plane edges are straight or crisply angled —
+chiseled, polygonal shapes, never soft rounded blobs; shadow meets light in a
+straight angular seam. HARD LIMITS: a face is five to eight flat planes
+total; any surface gets at most three value steps; shadow is one darker flat
+plane, never a gradient or blend. Hair is one or two chunky painted masses —
+silhouette only, zero strands. Fabric folds are a few straight angular strokes.
+Equipment, trim, patterns and fasteners are simplified blocks of color — details
+suggested, never drawn. Muted palette: slate blue-gray, warm ochre, ivory,
+brick-red accents. Coarse dry-brush edges and broken pigment on large areas;
+large areas stay quiet and under-detailed. When in doubt, paint LESS: fewer
+shapes, fewer details, flatter.
+
+Forbidden: smooth gradients, airbrush or glossy digital shading, photographic
+detail or realistic skin, fine linework or fine hair strands, surface
+subdivisions or micro-detail, more than three values on any surface, neon or rim
+lighting, uniform granular noise, dense tiny facets or polygon mosaics, and the
+polished modern AI character-sheet look.
+
+Image 1 is STYLE: match only its matte gouache painting technique. Image 2 is EDIT TARGET: user-approved portrait v014.
+Remove the visible backpack body entirely. Specifically remove the large gray beveled rectangular hard-shell object projecting behind Sion's viewer-left shoulder and hair in the upper-left-middle of the image. From this camera angle the backpack body should be fully hidden behind her torso. Replace all exposed gray backpack surfaces with the same dense navy starry sky visible around her, using small organic painted stars. Remove any residual gray fragments from that object around her hair and shoulder silhouette, leaving clean natural hair and ochre jacket edges. Preserve the dark shoulder straps lying on the front of her jacket; only the backpack BODY behind her is invisible. Do not mistake the anatomical left cyber arm on viewer-right for the backpack: preserve the metal shoulder, arm and hand exactly. Preserve the gray foreground ledge too.
+Also remove the separate stray charcoal-gray blob protruding behind her natural RIGHT elbow, at the far viewer-LEFT edge approximately halfway to three-quarters down the image (around x=0–75, y=740–1010). This is the shape indicated by the red arrow in image 2. Remove this entire disconnected gray protrusion, replacing it with starry navy sky and leaving the ochre sleeve's outer contour clean. Preserve the legitimate bent thighs below her torso and her raised knee on viewer-right. Remove the red arrow annotation ENTIRELY, including its long vertical shaft across the lower-left sky and ledge, restoring the underlying painted sky and ledge. Do not include any arrow in the result.
+Keep everything else exactly as image 2: approved hair and slightly lowered fringe, forehead, goggles, face, expression, body, crouch, raised knee, both hands, clothes, scarf, framing, moons, ship and sky. No new equipment or objects. Repaint only the removed backpack area and its immediate boundaries. Maintain exact 4:5 portrait, 1120 by 1400 pixels. All repainted marks match the STYLE image. No text or borders.
+Render everything in image 1's exact brush scale: fewest possible flat shapes, no blending, no micro-detail.

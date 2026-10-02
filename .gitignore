@@ -1,0 +1,33 @@
+.DS_Store
+
+# API keys — never commit
+*.key
+
+__pycache__/
+*.pyc
+
+# Scratch space for intermediate renders
+gm/image_generation/tmp/
+
+# Images are NOT stored in this repo. They live in the tree named by
+# gm/image_generation/image-root (see rules.md -> Where images live). These patterns are
+# a second line of defence, so a stray render can never be committed by accident.
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.tif
+*.tiff
+*.bmp
+*.psd
+
+# Third-party style references — kept locally, never published
+gm/image_generation/ref_images/archive/
+
+# Obsidian editor state — personal, never published
+.obsidian/
+
+# paid-API approval: encrypted key + the pending-request handshake
+.api-key.enc
+.api-request

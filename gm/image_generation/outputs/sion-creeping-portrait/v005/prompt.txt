@@ -1,0 +1,24 @@
+Hand-painted flat angular matte gouache illustration in the manner of late-1970s
+TSR tabletop-RPG interior art (Star Frontiers, early Dungeons & Dragons) — poster
+paint, not digital illustration. Build every form from a few large flat opaque
+color planes with hard edges. Plane edges are straight or crisply angled —
+chiseled, polygonal shapes, never soft rounded blobs; shadow meets light in a
+straight angular seam. HARD LIMITS: a face is five to eight flat planes
+total; any surface gets at most three value steps; shadow is one darker flat
+plane, never a gradient or blend. Hair is one or two chunky painted masses —
+silhouette only, zero strands. Fabric folds are a few straight angular strokes.
+Equipment, trim, patterns and fasteners are simplified blocks of color — details
+suggested, never drawn. Muted palette: slate blue-gray, warm ochre, ivory,
+brick-red accents. Coarse dry-brush edges and broken pigment on large areas;
+large areas stay quiet and under-detailed. When in doubt, paint LESS: fewer
+shapes, fewer details, flatter.
+
+Forbidden: smooth gradients, airbrush or glossy digital shading, photographic
+detail or realistic skin, fine linework or fine hair strands, surface
+subdivisions or micro-detail, more than three values on any surface, neon or rim
+lighting, uniform granular noise, dense tiny facets or polygon mosaics, and the
+polished modern AI character-sheet look.
+
+Image 1 is STYLE: match its rendering technique only, ignoring its people and setting. Image 2 is EDIT TARGET: user-liked double-moon portrait v004. Preserve this image's composition and every existing element exactly: Sion's face, goggles, hair, body, pose, clothing, hands, left cyber arm, backpack, foreground ledge, the two moons and their sizes and positions, and the single moving spaceship with its twin ochre exhaust trails.
+Change ONLY the star density in the dark sky. Bring back a rich, densely star-filled sky: add many hundreds of tiny irregular ivory and muted blue-white painted star specks distributed naturally throughout the navy background, interspersed with the existing few larger stars. Most new stars should be extremely small and restrained, with varied spacing and loose subtle clusters, evoking a deep beautiful night sky. Keep plenty of navy visible between stars. The tiny stars are isolated opaque paint flecks, not uniform grain or noise. No nebula, clouds, glow, gradients, new moons, or additional spaceships. Do not paint stars over Sion, the ledge, the moons, ship, or exhaust. Preserve all existing colors, lighting, shapes, dimensions and framing. Repaint only the sky; all repainted marks match the STYLE image's rendering.
+Render everything in image 1's exact brush scale: fewest possible flat shapes, no blending, no micro-detail.

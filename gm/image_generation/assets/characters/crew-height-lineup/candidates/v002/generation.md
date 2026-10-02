@@ -1,0 +1,9 @@
+Original filename: crew-height-lineup-v2.png (sidecar: crew-height-lineup-v2.md)
+
+# Crew height lineup v2
+
+Built-in image generation tool.
+
+Inputs: crew-height-lineup-v1.png (edit baseline); graxo/reference-angular-no-chart-v1.png (Graxo facial identity).
+
+Edit IMAGE 1, the three-character lineup. IMAGE 2 is the precise facial identity reference for the CENTER MAN ONLY. Restore his distinctive noticeably elongated face, long middle and lower face, long cheeks, rounded chin, and prominent long nose ending in a broad fleshy BULBOUS rounded tip with full nostril wings, matching the large bust portraits in image 2. Make these features clearly readable at lineup scale. Preserve his gray temples, strong brow, angular matte gouache planes, long purple cape and dark brown high-tech asymmetric vest. Preserve both other characters completely, poses, full bodies, boots, equipment, painterly angular style and current relative heights. Replace ALL current text and chart graphics with a simple shared ruler: exactly SEVEN equally spaced thin horizontal lines running across background behind all three bodies, labeled at far left only '0′', '1′', '2′', '3′', '4′', '5′', '6′'. Floor zero at bottom of soles, 6′ at the TOP of LEFT MAN's hair. On the 1536x1024 input positions this is baseline y=944 and 6′ y=137, so intermediate lines y=810,675,541,406,272. Center man's crown remains two inches above the 6′ line and woman's crown three inches below 6′. REMOVE all character names, personal height callouts, vertical crown pointers, fractional-foot lines and special crown lines. No text above heads. ONLY the seven ruler numbers at far left; no other text. Retain generous gray upper margin. Paint stays in large crisp irregular opaque color patches with visible broad brushwork, no smoothing or fine granular noise.

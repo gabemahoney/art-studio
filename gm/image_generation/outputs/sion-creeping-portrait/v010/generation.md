@@ -1,0 +1,42 @@
+# Sion creeping portrait — v010
+
+## User request
+no. Use the hair and goggle style from her reference image.
+
+## Run
+- Mode: local hair and goggles correction against user-liked v008 baseline, directly guided by approved Sion reference.
+- Style version: v2.
+- Tool: built-in image_gen; model not exposed.
+- Character: Sion description v1.
+- Image 1 STYLE: gm/image_generation/ref_images/style_references/canonical_style_reference.png (style v2; frozen at gm/image_generation/style_versions/canonical_style_reference-v2.png).
+- Image 2 EDIT TARGET: gm/image_generation/outputs/sion-creeping-portrait/v008/image.png.
+- Image 3 IDENTITY: gm/image_generation/assets/characters/sion/reference.png (= sion/candidates/v001/image.png). Sidecar and candidate files verified; matching MD5 3cb216bcadf77ff72d9efb4d2625b7a4.
+- Output generated 1122 × 1402; trimmed one pixel per edge with sips to exact 1120 × 1400 (4:5).
+
+## Exact prompt
+
+Hand-painted flat angular matte gouache illustration in the manner of late-1970s
+TSR tabletop-RPG interior art (Star Frontiers, early Dungeons & Dragons) — poster
+paint, not digital illustration. Build every form from a few large flat opaque
+color planes with hard edges. Plane edges are straight or crisply angled —
+chiseled, polygonal shapes, never soft rounded blobs; shadow meets light in a
+straight angular seam. HARD LIMITS: a face is five to eight flat planes
+total; any surface gets at most three value steps; shadow is one darker flat
+plane, never a gradient or blend. Hair is one or two chunky painted masses —
+silhouette only, zero strands. Fabric folds are a few straight angular strokes.
+Equipment, trim, patterns and fasteners are simplified blocks of color — details
+suggested, never drawn. Muted palette: slate blue-gray, warm ochre, ivory,
+brick-red accents. Coarse dry-brush edges and broken pigment on large areas;
+large areas stay quiet and under-detailed. When in doubt, paint LESS: fewer
+shapes, fewer details, flatter.
+
+Forbidden: smooth gradients, airbrush or glossy digital shading, photographic
+detail or realistic skin, fine linework or fine hair strands, surface
+subdivisions or micro-detail, more than three values on any surface, neon or rim
+lighting, uniform granular noise, dense tiny facets or polygon mosaics, and the
+polished modern AI character-sheet look.
+
+Image 1 is STYLE: match its matte gouache rendering technique only. Image 2 is EDIT TARGET: the user-liked tight crouching composition v008. Image 3 is IDENTITY: Sion's approved reference sheet; copy its HAIR AND GOGGLE DESIGN precisely, especially the bust portraits in the bottom row. Ignore the sheet layout and background.
+Correct ONLY the hair and goggles of Sion in image 2 using image 3 as the authoritative design. Replace the oversized flowing hair with the reference's compact, tousled shoulder-length dark bob: modest crown height, asymmetrical side-swept fringe, chunky jagged ends beside the jaw and neck, no huge swept-back mane, no tall puff. Match hair-to-face size and silhouette to the reference busts, adapting naturally to the existing head angle. Replace the oversized tall goggles with the reference's snug, horizontally wide but vertically shallow dark-framed goggles: match the frame outline, lens height relative to face, nose notch, compact silver side attachments and opaque ruby-red mirrored lenses with one broad diagonal pale reflection. Completely conceal eyes and eyebrows: NO visible eyes, eye-like circles, or facial features behind lenses. Do not copy the eye-like shapes currently visible in image 2. Match the reference goggles' proportional fit to the face, not merely their color. Preserve face size and expression, head angle and identity; do not shrink the whole head.
+Keep EVERYTHING ELSE from image 2: tight 4:5 framing, character scale, forward lean, crouch, raised knee, natural right hand, left cyber arm and hand, jacket, scarf, backpack, ledge, two moons, single moving ship and dense painted stars. Fill the small areas uncovered by the corrected hair with matching background or clothing. Do not zoom out. Output exact 4:5 portrait, 1120 by 1400 pixels. Repaint only hair, goggles, and their immediate boundaries; all repainted marks match the STYLE image's rendering. No text or border.
+Render everything in image 1's exact brush scale: fewest possible flat shapes, no blending, no micro-detail.
