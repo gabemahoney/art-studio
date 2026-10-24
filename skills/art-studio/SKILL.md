@@ -1,6 +1,6 @@
 ---
 name: art-studio
-description: Make, revise and approve illustrations in this repo's locked visual style — characters, locations, items, ships, and scenes built from them. Use for all image work in the vault: designing a new asset, revising an approved one, composing a scene, correcting an existing image, or promoting a candidate.
+description: Make, revise and approve illustrations in one locked visual style — characters, locations, items, ships, and scenes built from them. Works against a package (the style and its recurring subjects) and an output folder (where scenes land), both given as paths. Use for all image work: setting up a package, designing a new asset, revising an approved one, composing a scene, correcting an existing image, or promoting a candidate.
 ---
 
 # Art studio
@@ -10,30 +10,37 @@ a place, a ship, an object — persists on disk as a written design plus one app
 picture. Scenes are built only from those approved pictures, so the cast stays
 recognizable and the rendering never drifts.
 
-Work from `vault/`. Run every command from there. Never call an image tool directly
-and never hand-write a prompt — the four scripts in `bin/` exist to make that
-impossible to get wrong.
+Never call an image tool directly and never hand-write a prompt — the four scripts in
+this skill's `scripts/` folder exist to make that impossible to get wrong. Below, `S` is
+that folder's absolute path.
 
-## How the vault is laid out
+## Two locations, always given
+
+The skill holds no project content. Every command is told where to work:
+
+- **`--package PKG`** — one project's look and its recurring subjects. Ask the user for
+  it, or find it from the project's own README or CLAUDE.md. Never guess one.
+- **`--output OUT`** — where scene renders land. One package can feed many output
+  folders (a sourcebook and an adventure can share one cast); the user says which.
+
+Asset work writes into the package. **A scene render never writes into the package** —
+`gen.py` refuses an output folder inside it.
 
 ```
-vault/
-  style.md             the look, in words — the "Style Block" pasted into every prompt
-  rules.md             how generations run — read by gen.py, not just by you
-  image-root           one line: the directory holding this project's images
-  bin/                 prompt.py  gen.py  review.py  promote.py
+PKG/
+  style.md                 the look, in words — the "Style Block" pasted into every prompt
+  presets.json             optional named delivery specs
+  ref_images/style_references/canonical_style_reference.png    the anchor
+  style_versions/          frozen style-vN.md + canonical_style_reference-vN.png
   assets/<type>/<slug>/    one folder per recurring subject
-  outputs/<slug>/          one folder per scene
-  tmp/                     scratch; nothing here is ever cited by a receipt
+OUT/
+  <scene>/vNNN/            image.png + generation.md, one per attempt
+  <scene>/final.png        the approved scene, + final.md
 ```
 
 `<type>` is any category you invent — `personas`, `locations`, `items`, `ships`.
-`assets/<type>/` is created on demand.
-
-**Images are not in this repo.** Receipts and descriptions are; the `.png` files live
-in the tree named by `image-root`. Both trees use the same vault-relative paths, so a
-candidate's `generation.md` and its `image.png` look like siblings even though they
-sit in different directories. `bin/` resolves this for you — never think about it.
+`assets/<type>/` is created on demand. `rules.md` (beside this file) is the generation
+contract and is the same for every package.
 
 ### What each file is for
 
@@ -41,9 +48,9 @@ sit in different directories. `bin/` resolves this for you — never think about
 |---|---|---|
 | `style.md` | the look in words. `gen.py` parses the Style Block out of it and pastes it into every prompt | you, rarely |
 | `ref_images/style_references/canonical_style_reference.png` | **the anchor** — the same look as one picture, attached to every single generation | you, rarely |
-| `style_versions/style-vN.md` + `-vN.png` | frozen snapshots, so a receipt stamped `Style: v2` can be checked against what v2 said | you, on a version bump |
-| `rules.md` | the generation contract: the One Rule, input roles, reference validation, the paid-call gate | you, rarely |
-| **per asset** — `assets/<type>/<slug>/` | | |
+| `style_versions/style-vN.md` + `-vN.png` | frozen snapshots, so a receipt stamped `Style: v2` can be checked against what v2 said. `gen.py` refuses to run if `style.md` or the anchor has drifted from them | you, on a version bump |
+| `presets.json` | named delivery specs: `{"name": {"final_size": "WxH", "flatten": "#rrggbb", "max_mb": 2.5}}` | you |
+| **per asset** — `PKG/assets/<type>/<slug>/` | | |
 | `description.md` | **the design, in words. The single source of truth.** Scenes restate it rather than inventing | you |
 | `description_versions/description-vN.md` | frozen snapshot of the design at each version | you, on a bump |
 | `prompt.md` | a note to your future self: which inputs and roles regenerate this asset's sheet | you |
@@ -52,14 +59,14 @@ sit in different directories. `bin/` resolves this for you — never think about
 | `reference.png` | **the approved picture.** The only image a scene may build from | `promote.py` |
 | `reference.md` | the sidecar naming which candidate it came from, plus the user's approval verbatim. **Without it the asset counts as unapproved and `gen.py` refuses to attach it** | `promote.py` |
 | `sources/` | user-supplied originals, crops and composite inputs | you |
-| **per scene** — `outputs/<slug>/` | | |
+| **per scene** — `OUT/<scene>/` | | |
 | `vNNN/image.png` + `vNNN/generation.md` | exactly like an asset's candidates | `gen.py` |
 | `final.png` + `final.md` | the approved scene and its sidecar | `promote.py` |
 
 Two kinds of file, and the distinction is the whole design: **heads** are mutable and
 hold the current state (`description.md`, `reference.png`, `final.png`, `style.md`).
 **Revisions** are written once and never touched again (everything under
-`candidates/`, `outputs/<slug>/vNNN/`, `*_versions/`, `sources/`).
+`candidates/`, `OUT/<scene>/vNNN/`, `*_versions/`, `sources/`).
 
 **Status is never recorded separately — the files are the status.**
 
@@ -68,9 +75,25 @@ hold the current state (`description.md`, `reference.png`, `final.png`, `style.m
 - The latest attempt is the highest-numbered `vNNN`.
 - The current design is `description.md`; its header line gives the version.
 
+### Setting up a new package
+
+Needs Python 3, ImageMagick (`magick`), and the `codex` CLI logged in to ChatGPT.
+
+```bash
+mkdir -p PKG/ref_images/style_references PKG/style_versions PKG/assets
+cp $S/../templates/style.md PKG/style.md            # then write its Style Block
+cp anchor.png PKG/ref_images/style_references/canonical_style_reference.png
+cp anchor.png PKG/style_versions/canonical_style_reference-v1.png
+cp PKG/style.md PKG/style_versions/style-v1.md      # after the Style Block is written
+```
+
+`codex exec` refuses to run outside a git repository, so the directory you run from
+must be inside one (any repo works; it is read-only to Codex).
+
 ## Before you start
 
-Read `style.md` (what the art looks like) and `rules.md` (how generations run). They
+Confirm the package and, for a scene, the output folder. Read the package's `style.md`
+(what the art looks like) and this skill's `rules.md` (how generations run). They
 are the contract; this skill is the procedure. Then confirm which of three jobs you
 are doing — they share one loop and differ only in what goes into steps 1 and 3.
 
@@ -96,7 +119,7 @@ Nothing is invented at generation time. Before a prompt exists:
 ### 2. Assemble the prompt
 
 ```bash
-python3 bin/prompt.py \
+python3 $S/prompt.py --package PKG \
   --role STYLE:"Match its hand-painted matte rendering only. Ignore its subjects." \
   --role IDENTITY:"Copy this asset's design exactly. Ignore its sheet layout." \
   --task "A single horizontal three-quarter view against a plain background." \
@@ -114,13 +137,17 @@ build, clothing, equipment with body sides).
 ### 3. Generate one candidate
 
 ```bash
-python3 bin/gen.py --scene <slug> --prompt-file "$T/prompt.txt" --preset book-float \
+python3 $S/gen.py --package PKG --output OUT --scene <slug> \
+  --prompt-file "$T/prompt.txt" --preset <name> \
   --attach ref_images/style_references/canonical_style_reference.png:STYLE \
   --attach assets/<type>/<slug>/reference.png:IDENTITY \
   --request "<the user's words, verbatim>" --mode "<what this attempt changes>"
 ```
 
-- `--asset <type>/<slug>` instead of `--scene <slug>` for an asset's own sheet.
+- `--asset <type>/<slug>` instead of `--scene <slug>` (and no `--output`) for an
+  asset's own sheet; the candidate goes into the package.
+- Relative `--attach` paths resolve against the package, then the output folder. Use an
+  absolute path for anything else (a user's source image, say).
 - **`--attach` is `path:ROLE`; `--role` is `ROLE:text`.** The two are reversed. The
   order of the `--attach` flags must match the order of the `--role` flags, because
   position is the only binding the image model honors — "image 1" is a promise about
@@ -129,8 +156,7 @@ python3 bin/gen.py --scene <slug> --prompt-file "$T/prompt.txt" --preset book-fl
   the attachment cap, a dead model, the slug. Run it whenever anything is unusual.
 - `vNNN` is allocated by `gen.py` after a successful response, so a failure leaves no
   empty folder. Never create a candidate folder and never pick a number yourself.
-- `--preset book-float` = 1536x1024 on `#1b1e26` under 2.5 MB; `book-float-portrait`
-  = 1200x1500 on the same ground.
+- `--preset <name>` picks a delivery spec from the package's `presets.json`.
 
 `gen.py` fails closed *before* anything is billed on any One Rule violation or a
 failed provenance check. A refusal has cost nothing — read it and fix the call.
@@ -138,7 +164,7 @@ failed provenance check. A refusal has cost nothing — read it and fix the call
 ### 4. Look at the image, then record what you see
 
 ```bash
-python3 bin/review.py outputs/<slug>/vNNN --review "<what you see, misses included>"
+python3 $S/review.py OUT/<slug>/vNNN --review "<what you see, misses included>"
 ```
 
 Actually open it. Inspect contested details at 300–500% before calling anything
@@ -154,7 +180,7 @@ correction.
 ### 6. Promote — only on explicit approval
 
 ```bash
-python3 bin/promote.py outputs/<slug>/vNNN --approval "<the user's words, verbatim>"
+python3 $S/promote.py OUT/<slug>/vNNN --approval "<the user's words, verbatim>"
 ```
 
 Copies `image.png` to `final.png` (scenes) or `reference.png` (assets), writes the
@@ -225,11 +251,9 @@ provenance check.
   the slots: anchor + baseline + identities must total five.
 - **Never spend API credits without asking.** `--backend codex` is the default and
   bills the subscription. `--backend api` spends prepaid money, which the
-  subscription does not fund. `gen.py` holds no key, so a paid call fails closed —
-  but that is a mechanism, not an impossibility. **Never run `bin/unlock.py`
-  yourself and never pass `--key-fd`:** those carry the user's approval, not yours.
-  If you find a key anywhere — a `*.key` file, a shell history, the environment —
-  **do not use it: say you found it.**
+  subscription does not fund. A real paid call needs `--approved-by "<the user's
+  words>"`, and only the user can give those words — ask for each call, every time.
+  Never put an API key inside a package or a repo.
 - **Do not commit automatically.**
 
 ## Notes

@@ -1,10 +1,10 @@
 # art-studio
 
-Tooling and one skill for building consistent illustrated scenes. The vault lives in
-`vault/` — personas, locations, items and the style itself persist there
-as files, and every image is built from them.
+A generic illustration skill and its tooling: `skills/art-studio/`. It holds no project
+content — a project's style and assets live in a package outside this repo, and scene
+renders go to an output folder outside it too. Both are passed as `--package` and
+`--output` on every command.
 
-Before touching anything under there, read `vault/CLAUDE.md`, then its
-`rules.md` (how generations run) and `style.md` (what this particular project's art
-looks like). Images are generated only through `vault/bin/` — never by
-calling an image tool directly.
+Never add project-specific content (styles, assets, presets, receipts, subject names)
+to this repo. After touching anything in `skills/art-studio/scripts/`, run
+`python3 -I skills/art-studio/scripts/selftest.py`.

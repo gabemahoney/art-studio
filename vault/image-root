@@ -1,5 +1,0 @@
-# The ONE place this vault's image location is configured. First non-comment line wins.
-# Text (receipts, descriptions, sidecars) stays in the repo; images live here. Both trees
-# use the same vault-relative paths. No env override, no fallback — see rules.md ->
-# Where images live. The directory must already exist, so a typo fails loudly.
-/Users/gmahoney/projects/system52/rogue-frontier-private/pdf/image-gen-drafts

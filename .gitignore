@@ -1,17 +1,13 @@
 .DS_Store
 
-# API keys — never commit
+# API keys — never commit (gen.py reads ~/.config/art-studio/openai.key instead)
 *.key
 
 __pycache__/
 *.pyc
 
-# Scratch space for intermediate renders
-vault/tmp/
-
-# Images are NOT stored in this repo. They live in the tree named by
-# vault/image-root (see rules.md -> Where images live). These patterns are
-# a second line of defence, so a stray render can never be committed by accident.
+# This repo holds no project content, so it holds no images. A second line of
+# defence against a stray render being committed by accident.
 *.png
 *.jpg
 *.jpeg
@@ -22,18 +18,11 @@ vault/tmp/
 *.bmp
 *.psd
 
-# Third-party style references — kept locally, never published
-vault/ref_images/archive/
-
-# Obsidian editor state — personal, never published
-.obsidian/
-
-# paid-API approval: encrypted key + the pending-request handshake
-.api-key.enc
-.api-request
-
 # Skills live in skills/ as repo content. These are per-tool install locations —
 # symlink or copy from skills/ into whichever your agent reads. Never committed, so
 # each user chooses global (~/.claude/skills/) or per-project placement.
 .claude/
 .agents/
+
+# Obsidian editor state — personal, never published
+.obsidian/

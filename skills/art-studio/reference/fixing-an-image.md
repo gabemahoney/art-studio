@@ -4,7 +4,7 @@
 job is to route a correction to the cheapest tool that can do it. Read it **before**
 spending a generation on a fix.
 
-Run everything from `vault/`. `reference/imagemagick.md` has the commands.
+`reference/imagemagick.md` has the commands. `S`, `PKG` and `OUT` are as in `SKILL.md`.
 
 ## Step 0 — Diagnose before you route
 
@@ -60,9 +60,9 @@ giving it the mask as its alpha, and laying it over the original. The recipe,
 including the `-alpha off` trap that keeps recurring, is in
 `reference/imagemagick.md` → *Confining an operation to a region*.
 
-**Every intermediate goes to a scratch directory, never the vault.** `T=$(mktemp -d)`
-once per session, `$T` throughout. Only two intermediates belong in the vault, both
-listed under *Guardrails*.
+**Every intermediate goes to a scratch directory, never the package or the output
+folder.** `T=$(mktemp -d)` once per session, `$T` throughout. Only one kind of
+intermediate is kept, listed under *Guardrails*.
 
 **State tonal targets as a ratio** — mean of region A ÷ mean of region B. Ratios
 survive rephrasing; "a bit darker" does not. **Record both crop boxes every time you
@@ -100,7 +100,7 @@ brightness wins a little each pass. State the ratio as a number instead.
 as a source of shapes, never of finished frames: regenerate for geometry, then keep
 only the shape you asked for.
 
-1. Regenerate normally through `bin/prompt.py` + `bin/gen.py`, aimed at that region.
+1. Regenerate normally through `prompt.py` + `gen.py`, aimed at that region.
    Accept that the rest of the frame drifts.
 2. Mask **only** the fixed region out of the new candidate.
 3. Composite it onto the good baseline.
@@ -121,29 +121,27 @@ something the new candidate drew differently.
 ## Path 4 — The paid API, and the bar for spending credits
 
 **Ask the user first. Every time.** See *Never spend API credits without asking* in
-`SKILL.md`; `rules.md` → *Paid calls require the user's passphrase* owns the
+`SKILL.md`; `rules.md` → *Paid calls need the user's approval* owns the
 mechanism. One approval is one call: change anything and it needs a fresh one, because
 a blanket authorisation is not a yes to a specific call. When you ask, give what you
 tried, why the cheaper paths cannot do it, which `--quality` you chose, and the cost as
-an estimate. `--approved-by` records *why*, not permission.
-
-**Check the gate is armed rather than relying on it.** `bin/selftest.py` warns if any
-readable key is still in the vault — it searches by name *and* by content, so an
-innocuous filename is not safe — or if `.api-key.enc` is missing.
+an estimate. Pass their reply verbatim as `--approved-by`; `gen.py` refuses a paid
+call without it.
 
 **What this path buys you:** `--mask` sends a mask to `/v1/images/edits` and **only
 the masked pixels regenerate**. Codex cannot inpaint; path 3 only approximates it.
 
 ```bash
-python3 bin/prompt.py --masked \
+python3 $S/prompt.py --package PKG --masked \
   --role "EDIT TARGET:The image being repaired." \
   --role STYLE:"Match its hand-painted matte rendering only." \
   --task "..." --spec-file "$T/spec.txt" -o "$T/p.txt"
 
-python3 bin/gen.py --scene <slug> --prompt-file "$T/p.txt" --backend api \
-  --attach outputs/<slug>/vNNN/image.png:"EDIT TARGET" \
+python3 $S/gen.py --package PKG --output OUT --scene <slug> --prompt-file "$T/p.txt" \
+  --backend api --approved-by "<the user's words>" \
+  --attach <slug>/vNNN/image.png:"EDIT TARGET" \
   --attach ref_images/style_references/canonical_style_reference.png:STYLE \
-  --mask tmp/fix-the-hand.png --size 1536x1024
+  --mask OUT/<slug>/masks/fix-the-hand.png --size 1536x1024
 ```
 
 Copy that invocation exactly — `rules.md` → *Masked inpainting* has the reasons.
@@ -153,7 +151,7 @@ Copy that invocation exactly — `rules.md` → *Masked inpainting* has the reas
   1, because the endpoint masks the first image in `image[]`. With the anchor first
   you pay and get the anchor back with a hole repainted in it, and nothing detects it
   — the anchor and a scene candidate are both 1536x1024, so the dimension check passes.
-- **The mask is a plain greyscale vault mask, WHITE = repaint, never pre-inverted,**
+- **The mask is a plain greyscale mask, WHITE = repaint, never pre-inverted,**
   and `--size` must equal the EDIT TARGET's real dimensions, not the 1536x1024 above.
   Read them with `magick identify`. `gen.py` does **not** check polarity: it refuses an
   all-black mask and warns above 90% coverage, so a pre-inverted mask covering 86%
@@ -180,17 +178,15 @@ back to paths 1–3. Then still ask.
 first or second attempt at anything, or framing and composition changes — a mask
 cannot help when the whole frame has to move.
 
-`rules.md` records a **deposit**, not a balance. Never report it as money remaining.
-
 ## Guardrails
 
 - **Everything already written is frozen** — `image.png`, and any promoted
   `reference.png` or `final.png`. Never edit one in place and never open one in an
   image editor. Annotate a scratchpad copy; correct in a new `vNNN` and promote that,
   with `--replace` if a head already exists.
-- **Intermediates go to the scratchpad**, with exactly two exceptions that belong in
-  the vault: a mask a composite's receipt cites in order to be reproducible, and a
-  `--mask` for a paid call (`gen.py` refuses one outside the vault).
+- **Intermediates go to the scratchpad**, with one exception: a mask that a receipt
+  cites (a composite's, or a paid call's `--mask`) is kept beside that scene in the
+  output folder — `OUT/<scene>/masks/` — so the receipt stays reproducible.
 - **A composite you intend to keep needs its own `vNNN`** — the image as `image.png`
   and a hand-written `generation.md`, because `promote.py` and `--refinish` read no
   other filenames. **That receipt must open by saying no model was called**
@@ -201,12 +197,10 @@ cannot help when the whole frame has to move.
 - **Do not record a local correction with `review.py --replace`.** It overwrites the
   `Review:` line, which by then is the one that caught the fault. Put the note in the
   new candidate's receipt.
-- **A damaged candidate is sometimes recoverable — check its receipt.** Images live
-  outside this repo, so `git checkout` only helps if the tree holding them tracks
-  them. What does survive is the `codex source` path under
-  `~/.codex/generated_images/` recorded in `generation.md`, which does stay in this
-  repo — but **only generated candidates have one. A local composite has no upstream
-  copy and cannot be recovered at all.** `bin/selftest.py` prints the current census;
-  do not copy its numbers into prose, they go stale with every new candidate.
+- **A damaged candidate is sometimes recoverable — check its receipt.** `git checkout`
+  only helps if the folder holding it is in git. What may survive is the `codex source`
+  path under `~/.codex/generated_images/` recorded in `generation.md` — but **only
+  generated candidates have one. A local composite has no upstream copy and cannot be
+  recovered at all.**
 - **Never silently substitute a worse fix.** Say what is blocked, and carry on with
   the rest.

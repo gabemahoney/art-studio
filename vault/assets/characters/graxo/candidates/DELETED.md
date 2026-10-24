@@ -1,1 +1,0 @@
-Candidates v002-v011 deleted 2026-09-11 at user request (superseded mustache/restyle series; v008 design preserved as sources/design-from-candidate-v008.png). Numbers are never reused: next candidate is v012.

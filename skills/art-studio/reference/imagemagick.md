@@ -1,9 +1,9 @@
 # ImageMagick cookbook
 
-The commands behind `reference/fixing-an-image.md`. Run from `vault/`.
+The commands behind `reference/fixing-an-image.md`. `S`, `PKG` and `OUT` are as in `SKILL.md`.
 
 `T=$(mktemp -d)` once per session, and `$T` throughout — **every intermediate goes
-there, never into the vault.**
+there, never into the package or the output folder.**
 
 ## Confining an operation to a region
 
@@ -12,7 +12,7 @@ the original. Swap line 2's operation for anything at all — tonal, colour, blu
 sharpen.
 
 ```bash
-SRC=outputs/<scene>/vNNN/image.png
+SRC=OUT/<scene>/vNNN/image.png
 
 # 1. Mask: white = change, black = leave. -blur feathers the edge so there is no seam.
 magick -size 1536x1024 xc:black -fill white \
@@ -127,7 +127,7 @@ chain, a working comparison aborts the script. Append `|| true`.
 To hit a measured target use `-evaluate multiply`, factor = `target ÷ current`.
 
 **Avoid `-modulate`'s hue argument for "too magenta".** It rotates *every* hue, so it
-drags the ochres and teals along, and the direction is unintuitive — on a `#2D222B`
+drags every other colour along, and the direction is unintuitive — on a `#2D222B`
 swatch, `100,100,95` measures `#2D222D`, a barely-visible shift *toward* magenta. Mask
 the region and adjust saturation instead.
 
@@ -137,10 +137,10 @@ the region and adjust saturation instead.
 un-repaged 300x300 crop comes back out of `-flatten` at the original 1536x1024.
 
 ```bash
-# the vault's deliverable path: resizes to fit, pads, flattens, checks the size
+# gen.py's deliverable path: resizes to fit, pads, flattens, checks the size
 # budget. It does NOT crop, does NOT set DPI and does NOT recompress.
-python3 bin/gen.py --refinish outputs/<scene>/vNNN --final-size 2172x1448 \
-  --flatten '#1b1e26' --max-mb 4
+python3 $S/gen.py --package PKG --refinish OUT/<scene>/vNNN --final-size 2172x1448 \
+  --flatten '#ffffff' --max-mb 4
 
 # EVERY command below writes to a NEW path. When the raw output already matches
 # --final-size and has no alpha, --refinish writes no file and hands back image.png

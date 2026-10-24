@@ -1,6 +1,6 @@
 # Writing a spec the model obeys
 
-The Style Block and the closing line are handled for you by `bin/prompt.py`. This is
+The Style Block and the closing line are handled for you by `prompt.py`. This is
 about the part you write: the `--task` line and the `--spec-file` body.
 
 ## Replace prohibitions with countable positive statements
@@ -78,5 +78,5 @@ anchor's, the identity input is dominating: **describe more, attach less.**
 Images reach the model by attachment order. "Image 1" is a promise about order, not
 about a filename, which is why `--role` and `--attach` must be given in the same
 sequence. The one exception is a masked API call, where the EDIT TARGET takes image 1
-and the anchor follows — build those with `bin/prompt.py --masked`, and see
+and the anchor follows — build those with `prompt.py --masked`, and see
 `reference/fixing-an-image.md`.
