@@ -1,72 +1,70 @@
-# Rogue Frontier art studio
+# art-studio
 
-Skills and tooling for generating illustrations that stay in one locked visual style
-across sessions — characters, ships and locations persist as files, and every image is
-built from them.
+Skills and tooling for building **consistent illustrated scenes** — personas,
+locations, items, buildings and other assets persist as files across sessions, and
+every image is built from them, so the cast stays recognizable and the rendering never
+drifts.
+
+The tool is project-agnostic. A project supplies its own style guide, its own style
+anchor image and its own asset categories; nothing in `skills/` or `bin/` knows what
+you are illustrating. The vault checked in here happens to hold one such project.
 
 ## What's here
 
 | | |
 |---|---|
 | `skills/` | The skills themselves. Not installed — see below. |
-| `gm/image_generation/bin/` | The tooling the skills drive. stdlib only, no venv. |
-| `gm/image_generation/rules.md` | How generations run. Read by the code, not just by you. |
-| `gm/image_generation/style.md` | What the art looks like. `gen.py` parses this and fails closed if it can't. |
-| `gm/image_generation/outputs/`, `assets/` | The written record: one `generation.md` per attempt. |
+| `vault/bin/` | The tooling the skills drive. stdlib only, no venv. |
+| `vault/rules.md` | How generations run. Read by the code, not just by you. |
+| `vault/style.md` | What the art looks like. `gen.py` parses this and fails closed if it can't. |
+| `vault/outputs/`, `assets/` | The written record: one `generation.md` per attempt. |
 
 **Images are not in this repo.** They are large, numerous and regenerable, so they live
 in a separate tree you configure — see *Where images live* in `rules.md`. The text here
 is the provenance record; a clone needs the image tree synced separately before it can
 generate.
 
-## Installing the skills
+## Installing the skill
 
-Nothing is pre-placed. Copy or symlink whichever you want into the location your agent
-reads. **Global** makes a skill available in every project; **per-project** keeps it
-scoped to one.
-
-| skill | for | what it does |
-|---|---|---|
-| `art-studio` | Claude Code | How images are *made*: new assets, revisions, scenes, promotion |
-| `image-surgery` | Claude Code | How images are *changed*: routing a correction to the cheapest tool that can do it |
-| `create_asset` | Codex | Older Codex-side equivalent of `art-studio` |
-| `illustrate` | Codex | Older Codex-side scene composition |
-
-### Claude Code
+There is one skill, `art-studio`, and nothing is pre-placed. Copy or symlink it into
+the location your agent reads. **Global** makes it available in every project;
+**per-project** keeps it scoped to one.
 
 ```bash
 # per project
 mkdir -p <your-project>/.claude/skills
-ln -s "$PWD/skills/image-surgery" <your-project>/.claude/skills/
+ln -s "$PWD/skills/art-studio" <your-project>/.claude/skills/
 
 # or globally, for every project
-ln -s "$PWD/skills/image-surgery" ~/.claude/skills/
+ln -s "$PWD/skills/art-studio" ~/.claude/skills/
 ```
 
 Use `cp -R` instead of `ln -s` if you'd rather have an independent copy you can edit
-without touching this repo.
+without touching this repo. For Codex, same idea into `.agents/skills/` or wherever
+your install reads skills from.
 
-### Codex
+Its shape:
 
-Same idea, into `.agents/skills/` (per project) or wherever your Codex install reads
-skills from.
+| | |
+|---|---|
+| `SKILL.md` | The vault layout and what each file is for, the six-step loop every image goes through, the rules that are never optional. |
+| `reference/writing-prompts.md` | Writing a spec the model actually obeys. |
+| `reference/when-it-looks-wrong.md` | Choosing a baseline, diagnosing a failure, the re-style ladder. |
+| `reference/fixing-an-image.md` | Routing a correction to the cheapest tool that can do it. |
+| `reference/imagemagick.md` | The commands that routing picks. |
 
-### This repo's own copies
+`SKILL.md` names the step at which each reference file applies, so none of them is
+loaded until it is needed.
 
-`.claude/` and `.agents/` here are symlinks back into `skills/`, and both are
-gitignored — so working in this repo uses the same files it ships, with no second copy
+### This repo's own copy
+
+`.claude/skills/art-studio` here is a symlink back into `skills/`, and `.claude/` is
+gitignored — so working in this repo uses the same file it ships, with no second copy
 to drift.
-
-## A caveat on the Codex skills
-
-`create_asset` and `illustrate` predate the move of images out of the repo and still
-describe the old layout, where `image.png` sat beside its `generation.md`. The Claude
-Code skills and `rules.md` are current. Treat the Codex pair as historical until
-updated.
 
 ## Running the tooling
 
-Everything runs from `gm/image_generation/`:
+Everything runs from `vault/`:
 
 ```bash
 python3 -I bin/selftest.py      # every guard; run this first

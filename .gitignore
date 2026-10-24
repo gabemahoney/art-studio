@@ -7,10 +7,10 @@ __pycache__/
 *.pyc
 
 # Scratch space for intermediate renders
-gm/image_generation/tmp/
+vault/tmp/
 
 # Images are NOT stored in this repo. They live in the tree named by
-# gm/image_generation/image-root (see rules.md -> Where images live). These patterns are
+# vault/image-root (see rules.md -> Where images live). These patterns are
 # a second line of defence, so a stray render can never be committed by accident.
 *.png
 *.jpg
@@ -23,7 +23,7 @@ gm/image_generation/tmp/
 *.psd
 
 # Third-party style references — kept locally, never published
-gm/image_generation/ref_images/archive/
+vault/ref_images/archive/
 
 # Obsidian editor state — personal, never published
 .obsidian/

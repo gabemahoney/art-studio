@@ -1,0 +1,212 @@
+# Fixing an existing image
+
+`SKILL.md` covers how images are *made*. This covers how they are *changed*, and its
+job is to route a correction to the cheapest tool that can do it. Read it **before**
+spending a generation on a fix.
+
+Run everything from `vault/`. `reference/imagemagick.md` has the commands.
+
+## Step 0 — Diagnose before you route
+
+**Magnify the fault to 300–500% and name the actual shape on the canvas before
+choosing a path.** The user's words report a symptom, not a diagnosis: a garment
+reported as the wrong one is often the right garment painted badly, and every
+instruction aimed at the reported noun fails while the real shape goes untouched.
+Route the fault you can see, not the one you were told about.
+
+**If the fault is a design fact, the fix must go back into `description.md`.** A pixel
+edit teaches the model nothing — the next scene reads the text and repaints the
+original error. ImageMagick changes the deliverable; only the text changes what the
+asset *is*. Snapshot to `description_versions/` when the design itself moves.
+
+## The four paths, cheapest first
+
+**Credits are the last resort, not one of four equal options.** Work down the list
+and stop at the first path that can do the job.
+
+| | path | cost |
+|---|---|---|
+| 1 | **ImageMagick** — exact, provably zero change outside a mask | free |
+| 2 | **Codex regeneration** | subscription |
+| 3 | **Generate-and-composite** — one Codex call plus local surgery | subscription |
+| 4 | **API inpainting** — the only true targeted repaint here | real money |
+
+### Route by what the change actually is
+
+**ImageMagick can only rearrange pixels that already exist; regeneration invents
+them.** Most routing follows from that one line. The table is for the cases where it
+does not.
+
+| the change | path | why |
+|---|---|---|
+| Brightness, contrast, saturation, colour balance | **ImageMagick** | Exact, free, works when Codex is down. Never regenerate or pay for this. |
+| Resize, pad, print deliverable | **ImageMagick** (`gen.py --refinish`) | Upscales to ~1.5x are invisible in this flat matte style. |
+| Crop, set DPI, shrink an over-budget file | **ImageMagick**, by hand | `--refinish` does none of the three — it only *warns* about size. |
+| Wrong aspect ratio came back | **Regenerate**, stating the ratio in the prompt body | `--size` is advisory on Codex; `--refinish` would just pad it. |
+| Remove something whose covering texture is flat and adjacent | **ImageMagick** | Clone from the same image. |
+| Move a *correct* region from one candidate to another | **ImageMagick** | See *Transplants*. |
+| Tighter crop from pixels already present | **ImageMagick** | Crop, then upscale. |
+| Pose, expression, added objects, architecture, geometry; removing something that reveals structure or that a figure overlaps; any reframe revealing content outside the frame | **Regenerate, then path 3** | Those pixels do not exist — but a regeneration repaints the whole frame, so take only the region you asked for. |
+| Wrong, misspelled or badly drawn **text/lettering** | **Regenerate**, then path 3 | ImageMagick cannot author glyphs in style. Fix spelling and typeface in the prompt. |
+| A small region regeneration keeps breaking | **Path 3**, then **path 4** | Path 3 is free and usually enough; if its seam cannot be hidden, inpainting is the escalation — ask first. |
+| Rendering eroded across passes (facets rounding off) | **ImageMagick transplant** from an un-eroded version | Tonal correction cannot restore crispness; only new pixels can. |
+| A detail below ~30 px that will not converge | **Change the gesture** | Orientation is uncontrollable at that size. Pick a shape whose silhouette carries the meaning. |
+| Codex returns HTTP 400 | **Work the ladder in path 4** | That model just died. `rules.md` → *Codex models* has what to do. |
+
+## Path 1 — ImageMagick
+
+**Any whole-image operation can be confined to a region** by making an adjusted copy,
+giving it the mask as its alpha, and laying it over the original. The recipe,
+including the `-alpha off` trap that keeps recurring, is in
+`reference/imagemagick.md` → *Confining an operation to a region*.
+
+**Every intermediate goes to a scratch directory, never the vault.** `T=$(mktemp -d)`
+once per session, `$T` throughout. Only two intermediates belong in the vault, both
+listed under *Guardrails*.
+
+**State tonal targets as a ratio** — mean of region A ÷ mean of region B. Ratios
+survive rephrasing; "a bit darker" does not. **Record both crop boxes every time you
+quote a ratio**, or the number cannot be reproduced; most older receipts omit them,
+which is why their measurements are now unusable. Reuse whatever boxes a scene has
+already established — its receipts name them — or the series stops being comparable
+with its own history.
+
+## Path 2 — Codex regeneration, and its hidden cost
+
+**Every edit pass repaints the entire frame.** "Change only X" is an approximation
+recomputed from scratch, so errors accumulate in whatever direction the model's priors
+pull — and they accumulate *monotonically*, because the pull is in one direction. A
+freeze instruction does not stop it. Shadowed subjects drift brighter pass after pass,
+because the model pulls toward legible subjects.
+
+**Re-measure after every pass, and measure two numbers, not one.** Brightness drifts,
+and so does rendering: the flat angular facets round off a few percent per generation
+— invisible at any single magnification because it is gradual, and compounding into a
+visibly softer image over several passes. Edge energy is the second number
+(`reference/imagemagick.md` → *Measurement*).
+
+**A tonal correction never restores rendering.** Brightness and crispness are
+independent, so an eroded image measures perfectly clean on the ratio alone. Only new
+pixels bring crispness back: if edge energy has fallen, composite the region from an
+un-eroded version. Noting the drop in a receipt is not fixing it.
+
+**Never enumerate colours inside a freeze instruction.** Naming six coloured garments
+while asking to keep "depth of shadow" says *make six things identifiable*, and
+brightness wins a little each pass. State the ratio as a number instead.
+
+## Path 3 — Generate-and-composite (inpainting without credits)
+
+**This is the default ending for every regeneration, not a fallback.** Treat the model
+as a source of shapes, never of finished frames: regenerate for geometry, then keep
+only the shape you asked for.
+
+1. Regenerate normally through `bin/prompt.py` + `bin/gen.py`, aimed at that region.
+   Accept that the rest of the frame drifts.
+2. Mask **only** the fixed region out of the new candidate.
+3. Composite it onto the good baseline.
+
+**Do not wait for a freeze instruction to fail.** Freezes routinely hold — you verify
+them, they are intact — while the pass still costs you the picture, because a
+regeneration rewrites a large fraction of the frame whether or not your spec mentioned
+it. The damage lands in whatever you did not think to name. Take the region and the
+rest stays byte-identical; adopt the whole frame and every untouched thing in it
+quietly degrades, a little per pass, with nothing to restore it.
+
+The trigger is not "the freeze failed". The trigger is **"I am regenerating."**
+
+Works when the region is interior and its surroundings hide a feathered seam. Fails
+when the fix changes a silhouette against a busy background, or must align with
+something the new candidate drew differently.
+
+## Path 4 — The paid API, and the bar for spending credits
+
+**Ask the user first. Every time.** See *Never spend API credits without asking* in
+`SKILL.md`; `rules.md` → *Paid calls require the user's passphrase* owns the
+mechanism. One approval is one call: change anything and it needs a fresh one, because
+a blanket authorisation is not a yes to a specific call. When you ask, give what you
+tried, why the cheaper paths cannot do it, which `--quality` you chose, and the cost as
+an estimate. `--approved-by` records *why*, not permission.
+
+**Check the gate is armed rather than relying on it.** `bin/selftest.py` warns if any
+readable key is still in the vault — it searches by name *and* by content, so an
+innocuous filename is not safe — or if `.api-key.enc` is missing.
+
+**What this path buys you:** `--mask` sends a mask to `/v1/images/edits` and **only
+the masked pixels regenerate**. Codex cannot inpaint; path 3 only approximates it.
+
+```bash
+python3 bin/prompt.py --masked \
+  --role "EDIT TARGET:The image being repaired." \
+  --role STYLE:"Match its hand-painted matte rendering only." \
+  --task "..." --spec-file "$T/spec.txt" -o "$T/p.txt"
+
+python3 bin/gen.py --scene <slug> --prompt-file "$T/p.txt" --backend api \
+  --attach outputs/<slug>/vNNN/image.png:"EDIT TARGET" \
+  --attach ref_images/style_references/canonical_style_reference.png:STYLE \
+  --mask tmp/fix-the-hand.png --size 1536x1024
+```
+
+Copy that invocation exactly — `rules.md` → *Masked inpainting* has the reasons.
+`gen.py` enforces most of it. Two things the example cannot show you:
+
+- **The EDIT TARGET goes first.** This is the one call where the anchor is not image
+  1, because the endpoint masks the first image in `image[]`. With the anchor first
+  you pay and get the anchor back with a hole repainted in it, and nothing detects it
+  — the anchor and a scene candidate are both 1536x1024, so the dimension check passes.
+- **The mask is a plain greyscale vault mask, WHITE = repaint, never pre-inverted,**
+  and `--size` must equal the EDIT TARGET's real dimensions, not the 1536x1024 above.
+  Read them with `magick identify`. `gen.py` does **not** check polarity: it refuses an
+  all-black mask and warns above 90% coverage, so a pre-inverted mask covering 86%
+  sails through and you pay to repaint everything except the region you meant.
+
+The result is **re-encoded**: the unmasked area is preserved visually but not
+byte-identically, so the zero-pixels-changed guarantee does not transfer.
+
+**Try path 3 first** — free, and it hides most seams.
+
+### The bar
+
+Propose credits only if one of these holds. If none does, do not raise it at all — go
+back to paths 1–3. Then still ask.
+
+- An **exact native pixel size** is needed and the upscale would exceed ~1.5x.
+- A **small region** survived path 3 and its seam cannot be hidden.
+- **Codex is genuinely unavailable.** `rules.md` → *Codex models* lists what is left;
+  there is currently one working model, so "try another model" is not a step. Retry
+  once, check `~/.codex/auth.json` exists, then add the dead model to
+  `CODEX_MODELS_BROKEN`, update that table, and say plainly that Codex is down.
+
+**Never for:** tonal or colour work, crops and resizes under ~1.5x, transplants, a
+first or second attempt at anything, or framing and composition changes — a mask
+cannot help when the whole frame has to move.
+
+`rules.md` records a **deposit**, not a balance. Never report it as money remaining.
+
+## Guardrails
+
+- **Everything already written is frozen** — `image.png`, and any promoted
+  `reference.png` or `final.png`. Never edit one in place and never open one in an
+  image editor. Annotate a scratchpad copy; correct in a new `vNNN` and promote that,
+  with `--replace` if a head already exists.
+- **Intermediates go to the scratchpad**, with exactly two exceptions that belong in
+  the vault: a mask a composite's receipt cites in order to be reproducible, and a
+  `--mask` for a paid call (`gen.py` refuses one outside the vault).
+- **A composite you intend to keep needs its own `vNNN`** — the image as `image.png`
+  and a hand-written `generation.md`, because `promote.py` and `--refinish` read no
+  other filenames. **That receipt must open by saying no model was called**
+  (`Source: local composite, no generation`), then name the baseline `vNNN`, the donor
+  `vNNN` and the commands. Without it, a composite attached to a later generation
+  passes the provenance check silently and enters the record as model history.
+  Throwaways go to the scratchpad instead.
+- **Do not record a local correction with `review.py --replace`.** It overwrites the
+  `Review:` line, which by then is the one that caught the fault. Put the note in the
+  new candidate's receipt.
+- **A damaged candidate is sometimes recoverable — check its receipt.** Images live
+  outside this repo, so `git checkout` only helps if the tree holding them tracks
+  them. What does survive is the `codex source` path under
+  `~/.codex/generated_images/` recorded in `generation.md`, which does stay in this
+  repo — but **only generated candidates have one. A local composite has no upstream
+  copy and cannot be recovered at all.** `bin/selftest.py` prints the current census;
+  do not copy its numbers into prose, they go stale with every new candidate.
+- **Never silently substitute a worse fix.** Say what is blocked, and carry on with
+  the rest.
