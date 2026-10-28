@@ -230,7 +230,7 @@ head revision without `--replace`.
 | Pays with | the ChatGPT/Codex subscription | prepaid OpenAI API credits |
 | Image model | not exposed by the tool | pinned, e.g. `gpt-image-2.5-sunburst-2026-09-08` |
 | Prompt integrity | verbatim via the disk relay | verbatim by construction |
-| Requested size | advisory — the tool picks its own | honored |
+| Requested size | the **shape** is followed, the pixel count is not (asked 1568x896, got 1659x948: exactly 7:4, 2026-10-24) — use `--final-size` for exact pixels | honored |
 | Targeted repaint | not possible | **yes — `--mask`, only those pixels regenerate** |
 
 A ChatGPT/Codex subscription does **not** fund API keys; they are separately
