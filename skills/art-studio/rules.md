@@ -77,7 +77,8 @@ Rules:
 - Attach the minimum identity image that carries information the design text
   cannot: full source, crop, or nothing (`reference/writing-prompts.md` → *Attach the
   minimum identity input*).
-- IDENTITY inputs are approved `reference.png` files or `sources/` originals —
+- IDENTITY inputs are approved `reference.png` files, crops cut from them, or
+  `sources/` originals —
   never an unapproved candidate, except as a user-designated baseline or a crop
   source. Chaining candidate outputs compounds drift.
 - Ignore borders, captions, signatures, and screenshot chrome in any reference.

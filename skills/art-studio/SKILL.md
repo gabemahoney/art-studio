@@ -212,7 +212,7 @@ What changes between them is only step 1's text and step 3's attachments.
 |---|---|---|
 | **New asset** | `description.md` v1 | anchor as STYLE, plus the *minimum* identity input: a `sources/` original, a crop, or nothing |
 | **Revise an asset** | `description.md` bumped + snapshotted | anchor as STYLE, plus the baseline as EDIT TARGET |
-| **Scene** | a scene spec file | anchor as STYLE, plus **at most one** cast `reference.png` or group lineup as IDENTITY, with the rest of the cast in text (`reference/writing-prompts.md`) |
+| **Scene** | a scene spec file | anchor as STYLE, plus one single-view crop per cast member as IDENTITY, never a multi-view sheet (`reference/writing-prompts.md` → *Give a scene one single-view crop per cast member*) |
 
 **New asset, default sheet layout** (unless the user specifies one): people get
 front, three-quarter, profile and back full-body views at one consistent scale, plus
@@ -269,8 +269,8 @@ Read the matching reference file when you hit one of these, rather than browsing
 all.
 
 - **Writing the `--task` line or spec file** → `reference/writing-prompts.md`: countable
-  positive statements instead of bans, aspect ratio in the body, scale drift, and the
-  one-identity-sheet limit for scenes.
+  positive statements instead of bans, aspect ratio in the body, scale drift, and
+  single-view cast crops for scenes.
 - **The image came out wrong, before any revision** → `reference/when-it-looks-wrong.md`:
   picking the baseline from the user's words, the stale-baseline guard, diagnosing a
   style failure, and the ladder for right design with wrong rendering.
