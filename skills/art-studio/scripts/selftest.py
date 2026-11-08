@@ -433,6 +433,35 @@ def run_checks(tmp: Path) -> int:
                code != 0 and "not a directory" in msg and "chmod" not in msg
                and sorted(tmp.rglob("*")) == before, f"exit {code}:\n{msg}")
 
+    # --- --refinish records its deliverable on the receipt itself, never by hand
+    for name, receipt, expect in [
+        ("--refinish writes the Delivered line after Output, and replaces it on a rerun",
+         "Status: awaiting user evaluation\nOutput: image.png, 1536x1024\n"
+         "Review: pending — record with review.py\n\n## Exact prompt\n\nx\n",
+         "Output: image.png, 1536x1024\nDelivered: delivered-800x600.png"),
+        ("--refinish adds the Delivered line to an older receipt without an Output line",
+         "Status: approved\n\n## Exact prompt\n\nx\n",
+         "Status: approved\nDelivered: delivered-800x600.png"),
+    ]:
+        vdir = out / f"refinish-{checks}/v001"
+        vdir.mkdir(parents=True)
+        magick("-size", "1536x1024", "xc:#336699", str(vdir / "image.png"))
+        (vdir / "generation.md").write_text(f"# refinish v001\n\n{receipt}")
+        runs = [script("gen.py", *P, "--refinish", str(vdir), "--final-size", "800x600")
+                for _ in range(2)]
+        text = (vdir / "generation.md").read_text()
+        report(name, all(code == 0 for code, _ in runs) and expect in text
+               and text.count("Delivered:") == 1 and text.index("Delivered:")
+               < text.index("## Exact prompt"), f"{runs}\nreceipt:\n{text}")
+
+    vdir = out / "refinish-none/v001"
+    vdir.mkdir(parents=True)
+    magick("-size", "1536x1024", "xc:#336699", str(vdir / "image.png"))
+    code, msg = script("gen.py", *P, "--refinish", str(vdir), "--final-size", "800x600")
+    report("--refinish without a receipt is refused and writes nothing",
+           code != 0 and "no generation.md" in msg
+           and sorted(c.name for c in vdir.iterdir()) == ["image.png"], f"exit {code}:\n{msg}")
+
     print(f"\n  {checks - failures}/{checks} checks passed")
     return 1 if failures else 0
 

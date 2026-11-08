@@ -688,6 +688,24 @@ def finish(raw: Path, final_size: str, flatten: str, max_mb: float) -> tuple[Pat
     return dest, note
 
 
+def record_delivered(receipt: Path, delivered: str) -> None:
+    """Set the receipt's Delivered line after --refinish, as promote.py sets Status.
+
+    Replaces an existing Delivered line; otherwise inserts one after the Output line,
+    or, on a receipt without one, before its first '## ' section."""
+    text = receipt.read_text()
+    line = f"Delivered: {delivered}"
+    for pattern, repl in ((r"^Delivered:.*$", lambda m: line),
+                          (r"^Output:.*$", lambda m: f"{m.group(0)}\n{line}"),
+                          (r"\n+(?=^## )", lambda m: f"\n{line}\n\n")):
+        new, n = re.subn(pattern, repl, text, count=1, flags=re.M)
+        if n:
+            break
+    else:
+        new = text.rstrip("\n") + f"\n{line}\n"
+    receipt.write_text(new)
+
+
 def generate_codex(prompt: str, attachments, model: str, size: str) -> tuple[bytes, str]:
     """Pixel backend: Codex CLI's built-in image_gen, billed to the ChatGPT plan."""
     import subprocess
@@ -844,8 +862,9 @@ def main() -> int:
                                          "(build one with prompt.py)")
     p.add_argument("--refinish", metavar="VDIR",
                    help="re-derive the deliverable from an existing candidate's "
-                        "image.png (a vNNN directory) and exit — no "
-                        "generation, no new vNNN, nothing billed")
+                        "image.png (a vNNN directory), record it on the receipt's "
+                        "Delivered line, and exit — no generation, no new vNNN, "
+                        "nothing billed")
     p.add_argument("--attach", action="append", default=[], metavar="PATH:ROLE",
                    help="repeatable, in order; image 1 must be the anchor as STYLE")
     p.add_argument("--preset", metavar="NAME",
@@ -907,15 +926,20 @@ def main() -> int:
             raise Fail("--mask has no meaning with --refinish; --refinish only "
                        "re-derives a deliverable and calls no model.")
         raw = (Path(args.refinish).expanduser() / "image.png").resolve()
+        receipt = raw.parent / "generation.md"
         if not raw.exists():
             raise Fail(f"no image.png in {args.refinish}")
+        if not receipt.exists():
+            raise Fail(f"no generation.md in {args.refinish}, so the deliverable could "
+                       "not be recorded. Every vNNN needs its receipt.")
         if not args.final_size:
             raise Fail("--refinish needs --final-size or --preset")
         require_binary("magick", "install ImageMagick (brew install imagemagick)")
         dest, note = finish(raw, args.final_size, args.flatten, args.max_mb)
         verb = "wrote" if dest != raw else "deliverable ="
         print(f"  {verb} {dest}\n  {note}")
-        print("  note: update the candidate's generation.md Delivered line by hand")
+        record_delivered(receipt, note)
+        print(f"  updated {receipt} Delivered line")
         return 0
 
     if not args.prompt_file:

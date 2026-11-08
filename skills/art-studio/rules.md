@@ -135,7 +135,7 @@ their arguments, so they run from anywhere.
   matches `--attach` order, so `prompt.py` and you own those.
   **`selftest.py`'s cases are the authoritative list of its refusals**, because a list
   here goes stale. `--refinish <vNNN dir>` re-derives a deliverable from an existing
-  `image.png` without generating anything.
+  `image.png` without generating anything, and records it on the receipt.
 - **`review.py`** and **`promote.py`** take the `vNNN` directory and read its kind from
   the path: a `vNNN` under `candidates/` is an asset candidate, anything else a scene
   version. Each refuses to overwrite its field or head without `--replace`.
@@ -150,11 +150,14 @@ A preset also sets the *requested* size to its own aspect, so the deliverable is
 full-bleed rather than padded. The deliverable is always scaled to fit and padded,
 never cropped, so no subject is cut off to satisfy a box.
 
-### The two post-hoc fields
+### The post-hoc fields
 
-A receipt is frozen history with two exceptions, because both are known only after
-the run: **`Status`**, owned by `promote.py`, and **`Review`**, owned by `review.py`.
-Never edit any other field, or these two by hand.
+A receipt is frozen history with three exceptions, because each is known only after
+the run: **`Status`**, owned by `promote.py`; **`Review`**, owned by `review.py`; and
+**`Delivered`**, owned by `gen.py` (rewritten by `--refinish`). Never edit a receipt by
+hand, with one exception: a receipt older than `gen.py`'s format may lack the `Status:
+awaiting user evaluation` or `Review:` line the scripts rewrite, and then you record
+that one field by hand, once, as the script's message says.
 
 ## Backends
 
