@@ -1,30 +1,20 @@
 # Generation rules
 
-Mechanics for EVERY image generation, in both skills. `style.md` defines what the
-style IS; this file defines how generations run. Read both before any generation.
+Mechanics for every image generation. The package's `style.md` defines what the style
+is; this file defines how generations run. Read both before any generation.
 
 ## Package and output
 
-Every command is told where to work. There is no config file, no environment override
-and no default location: a silent fallback is how renders end up somewhere nobody meant.
+`SKILL.md` → *Two locations, always given* has the layout. Every command is told where
+to work, with no config file, environment override or default location, because a
+silent fallback is how renders end up somewhere nobody meant.
 
-| | |
-|---|---|
-| **`--package PKG`** | one project's look and subjects: `style.md`, the anchor, `style_versions/`, `presets.json`, `assets/` |
-| **`--output OUT`** | where scene renders are delivered: `OUT/<scene>/vNNN/{image.png, generation.md}` |
-
-- **Asset work writes into the package** (`--asset <type>/<slug>` →
-  `PKG/assets/<type>/<slug>/candidates/vNNN/`), because it is changing the package.
-- **A scene render never writes into the package.** It reads the style and assets and
-  writes only under `OUT`, so one package can feed many output folders — and two repos
-  rendering from the same package at once cannot collide. `gen.py` refuses an `OUT`
-  that overlaps `PKG`, and refuses `--output` together with `--asset`.
-- Text and image sit side by side: each `vNNN/` holds its `image.png` and its
-  `generation.md`. Whether either location is in git is the project's business.
+- A scene render reads the package and writes only under `OUT`, so one package can
+  feed many output folders and two repos rendering from it at once cannot collide.
+  `gen.py` refuses an `OUT` that overlaps `PKG`, and `--output` together with `--asset`.
 - Relative `--attach` and `--mask` paths resolve against the package, then the output
-  folder; a path present in both is refused as ambiguous. Receipts write paths as
+  folder, and a path present in both is refused as ambiguous. Receipts write paths as
   `package:<rel>`, `output:<rel>`, or absolute.
-- `vNNN` is allocated after a successful response, so a failure leaves no empty folder.
 
 ## The One Rule (prevents style drift)
 
@@ -36,9 +26,8 @@ must do ALL of these:
    exception of a masked API call (see *Masked inpainting*), ALWAYS as the FIRST
    attached image, so that "image 1" in any prompt unambiguously means the anchor.
 2. Include the full Style Block from `style.md`, verbatim, at the TOP of the prompt.
-3. End the prompt with the closing style line exactly as `style.md` states it.
-   `style.md` is the single authority for that wording; it is quoted here only by
-   reference so the two files cannot drift apart again.
+3. End the prompt with the closing style line exactly as `style.md` states it; only
+   `style.md` holds that wording, so the two files cannot drift apart.
 4. Deliver the prompt to the image model **byte-for-byte**. No agent, wrapper or
    tool may paraphrase, "normalize", summarize or expand it on the way.
 
@@ -47,29 +36,26 @@ If a call skips any part, the result is invalid — regenerate.
 
 ### Why #4 exists
 
-Codex CLI's built-in `image_gen` rewrites prompts by default. Its skill doc
-(`~/.codex/skills/.system/imagegen/SKILL.md`, step 9) instructs the model to "normalize
-it into a clear spec", and session logs confirm it: a nine-word test prompt reached the
-tool as a 60-word spec with invented constraints. The One Rule works only if the Style
-Block arrives verbatim, so an LLM paraphrasing it in transit defeats the entire
-anti-drift mechanism — silently, with no error.
+Codex CLI's built-in `image_gen` rewrites prompts by default: its skill doc
+(`~/.codex/skills/.system/imagegen/SKILL.md`, step 9) tells the model to "normalize it
+into a clear spec", and a nine-word test prompt reached the tool as a 60-word spec with
+invented constraints. A paraphrased Style Block silently defeats the whole anti-drift
+mechanism.
 
-`gen.py --backend codex` defeats this structurally rather than by asking nicely: the
-prompt is written to a file, and Codex is told to read it with `fs.readFileSync` inside
-its code-mode exec block and pass those bytes straight to the tool argument. The text
-goes disk → shell → tool, never through model output tokens, so paraphrasing is
-impossible. Verified on a real run: the model's entire output was 313 characters, and the
-Style Block appears nowhere in model-authored content.
+`gen.py --backend codex` prevents this structurally: it writes the prompt to a file and
+tells Codex to read it with `fs.readFileSync` and pass those bytes straight to the tool
+argument, so the text never passes through model output tokens. A real run confirmed
+it: the model's whole output was 313 characters, with no Style Block in it.
 
-Consequence for history: `## Exact prompt` in receipts written before 2026-09-28 records
-what was handed to Codex, not what the image model saw. Treat those as approximate.
+`## Exact prompt` in receipts written before 2026-09-28 records what was handed to
+Codex, not what the image model saw, so treat those as approximate.
 
 ## Image input roles
 
-**Assembly order, because style must dominate:** Style Block FIRST, then the image
-roles, then the `TASK:` line, then design text, then layout/scene spec, then the closing
-style line LAST — roles go at the top of the prompt *body*, never above the Block. Design wording names materials
-and colors, not finish — the Style Block owns finish.
+**Assembly order, because style must dominate:** Style Block first, then the image
+roles, the `TASK:` line, design text, layout or scene spec, and the closing style line
+last; `prompt.py` builds this order. Design wording names materials and colors, not
+finish, because the Style Block owns finish.
 
 Declare every attached image at the top of the prompt by NUMBER and exactly one
 role ("Image 1 is STYLE... Image 2 is IDENTITY...") — position is the only binding
@@ -88,8 +74,8 @@ but never replace it:
 Rules:
 
 - Attach the minimum identity image that carries information the design text
-  cannot: full source, crop, or nothing (see the `art-studio` skill's escalation
-  ladder).
+  cannot: full source, crop, or nothing (`reference/writing-prompts.md` → *Attach the
+  minimum identity input*).
 - IDENTITY inputs are approved `reference.png` files or `sources/` originals —
   never an unapproved candidate, except as a user-designated baseline or a crop
   source. Chaining candidate outputs compounds drift.
@@ -117,67 +103,38 @@ overwrites sneak in.
 
 ## Style versioning procedure
 
-`style.md` is the mutable head revision of the style. Before changing the Style
-Block, **either closing style line**, or replacing the anchor image: confirm the current version is frozen in
-`style_versions/` (style-v<N>.md + canonical_style_reference-v<N>.png), make the
-change, bump the version header, add a changelog line, freeze the new version.
-Replacing the anchor image IS a style change. `style_versions/` is read-only
-history — never edit or attach from it, and never re-freeze a version to match later
-edits. **Only three things are versioned: the Style Block, both closing style lines, and
-the anchor image.** Explanatory prose in `style.md` may therefore differ from the frozen
-copy without being drift — `gen.py` compares exactly that subset before every call, and a mismatch
-there is real. Every `generation.md` records the style
-version it ran under and embeds the exact prompt.
+`style.md` is the mutable head revision of the style. **Only three things are
+versioned: the Style Block, both closing style lines, and the anchor image**, and
+`gen.py` compares exactly those with the frozen copy before every call, so a mismatch
+there is real drift while prose may differ freely.
+
+To change any of the three (replacing the anchor counts): confirm the current version
+is frozen in `style_versions/` (`style-v<N>.md` + `canonical_style_reference-v<N>.png`),
+make the change, bump the version header, add a changelog line, and freeze the new
+version. Never edit, attach from or re-freeze anything in `style_versions/`, because
+receipts stamped with a version must stay checkable against it.
+
+When you change the closing line, you may list the old wordings under
+`## Legacy closing style lines` in `style.md`, one `> ` quote each and below the
+closing-line sections, so prompts from older receipts still replay: `gen.py` accepts
+them with a warning on ordinary calls and refuses them on masked ones.
 
 ## Tooling
 
-The scripts in this skill's `scripts/` folder enforce everything above. Stdlib only — no
-venv, no `poetry install`. Run them from anywhere; locations come from the arguments.
-Below, `S` is this skill's `scripts/` directory.
+The scripts in `scripts/` enforce everything above; `SKILL.md` → *The loop* shows each
+call. They are stdlib-only Python, so they need no venv, and take every location from
+their arguments, so they run from anywhere.
 
-### `prompt.py` — assemble the prompt
-
-Emits the sections in the mandated order (Style Block, image roles by number,
-design text, scene spec, closing line). Never hand-write a prompt: that is how
-the Style Block drifts and the closing line gets paraphrased.
-
-```bash
-python3 $S/prompt.py --package PKG \
-  --role STYLE:"Match its hand-painted matte rendering only. Ignore its subjects." \
-  --role IDENTITY:"Copy this asset's design exactly. Ignore its sheet layout." \
-  --task "A single horizontal three-quarter view against a plain background." \
-  --design-from assets/<type>/<slug>/description.md --design-section Exterior \
-  --spec-file /tmp/framing.txt -o /tmp/prompt.txt
-```
-
-`--role` is repeatable and **in attachment order**; image 1 must be STYLE. Omit
-the text after the colon to get the standard role wording from this file.
-
-### `gen.py` — generate one candidate
-
-Refuses to run before anything is billed: on any One Rule violation (anchor not first
-as STYLE, Style Block not verbatim, no closing style line), on a `reference.png` failing
-validation, and on the live anchor differing from its frozen `style_versions/` copy.
-**That list goes stale; `selftest.py`'s cases are the authoritative enumeration** —
-they also cover the five-attachment cap, a doubled anchor, a dead model, and every mask
-guard. One exception to #3: a short list of **legacy closing-line wordings is accepted on
-an ordinary call with a warning**, because old receipts used them — but refused outright on
-a masked call, where naming "image 1" would point at the picture being repainted.
-Allocates `vNNN` only after a successful response, so a failure leaves no empty
-folders. Writes `image.png` (raw, frozen), the deliverable,
-and a complete `generation.md`.
-
-```bash
-python3 $S/gen.py --package PKG --output OUT --scene <slug> \
-  --prompt-file /tmp/prompt.txt --preset <name> \
-  --attach ref_images/style_references/canonical_style_reference.png:STYLE \
-  --attach assets/<type>/<slug>/reference.png:IDENTITY \
-  --request "<user's words, verbatim>" --mode "<what this attempt changes>"
-```
-
-Use `--asset <type>/<slug>` (and no `--output`) instead of `--scene` for asset candidates, and
-`--dry-run` to check invariants for free. `--refinish <vNNN dir>` re-derives a
-deliverable from an existing `image.png` without generating anything.
+- **`prompt.py`** emits the sections in the mandated order: Style Block, image roles
+  by number, `TASK:`, design text, spec, closing line.
+- **`gen.py`** refuses to run, before anything is billed, on a One Rule violation, a
+  `reference.png` failing validation, or a live style differing from its frozen copy.
+  **`selftest.py`'s cases are the authoritative list of its refusals**, because a list
+  here goes stale. `--refinish <vNNN dir>` re-derives a deliverable from an existing
+  `image.png` without generating anything.
+- **`review.py`** and **`promote.py`** take the `vNNN` directory and read its kind from
+  the path: a `vNNN` under `candidates/` is an asset candidate, anything else a scene
+  version. Each refuses to overwrite its field or head without `--replace`.
 
 **Presets** name a delivery spec once, in the package's optional `presets.json`:
 
@@ -185,43 +142,15 @@ deliverable from an existing `image.png` without generating anything.
 {"page-float": {"final_size": "1536x1024", "flatten": "#ffffff", "max_mb": 2.5}}
 ```
 
-A preset also sets the *requested* size to its own
-aspect, so the deliverable is full-bleed rather than padded. The deliverable is
-always scaled to FIT and padded, never cropped — no hull is ever cut off to
-satisfy a box.
-
-### `review.py` — record the assessment
-```bash
-python3 $S/review.py OUT/<scene>/v002 --review "<what you see, misses included>"
-```
-Sets the `Review` line `gen.py` leaves as a placeholder. Refuses to
-overwrite an existing review without `--replace`.
+A preset also sets the *requested* size to its own aspect, so the deliverable is
+full-bleed rather than padded. The deliverable is always scaled to fit and padded,
+never cropped, so no subject is cut off to satisfy a box.
 
 ### The two post-hoc fields
 
-A receipt is frozen history with exactly two exceptions, because both are known
-only AFTER the run:
-
-- **`Status`** — owned by `promote.py`, set when the user approves.
-- **`Review`** — owned by `review.py`, set once you have looked at the image.
-
-`gen.py` runs before the image exists, so it cannot take the review; it writes
-a placeholder. Fill it with `python3 $S/review.py <vNNN dir> --review "..."`. Editing
-any other field of a receipt, or editing these two by hand, is still forbidden.
-
-### `promote.py` — approve a candidate
-
-```bash
-python3 $S/promote.py OUT/<scene>/v002 --approval "<user's words, verbatim>"
-```
-
-Both take the `vNNN` directory's path and read its kind from the path: a `vNNN` under
-`candidates/` is an asset candidate, anything else a scene version.
-
-Copies `image.png` to `reference.png` (assets) or `final.png` (scenes), writes the
-sidecar recording which `vNNN` it came from, re-verifies byte-identity after the
-copy, and updates the candidate's receipt status. Refuses to overwrite an existing
-head revision without `--replace`.
+A receipt is frozen history with two exceptions, because both are known only after
+the run: **`Status`**, owned by `promote.py`, and **`Review`**, owned by `review.py`.
+Never edit any other field, or these two by hand.
 
 ## Backends
 
@@ -262,17 +191,17 @@ by index. `check_prompt()` requires the matching line for the call type and refu
 mismatch, so a prompt that contradicts its own payload cannot be sent.
 
 **`--quality` defaults to `high`** (`low`/`medium`/`high`/`xhigh`/`max`/`auto`) and is the
-cost lever inside the $0.05–0.35 estimate — it reaches the receipt, so say which you
-chose when you ask. `--size` must equal the EDIT TARGET's own
-dimensions, since the mask is aligned to that
-image; it defaults to 1536x1024, which is wrong for portrait and oversized
-candidates, so read the real size with `magick identify` and pass it.
+cost lever inside the $0.05–0.35 estimate, so say which you chose when you ask.
+`--size` must equal the EDIT TARGET's own dimensions, because the mask is aligned to
+that image; its 1536x1024 default is wrong for portrait and oversized candidates, so
+read the real size with `magick identify` and pass it.
 
 The call also fails closed on an alpha-carrying mask, a dimension or `--size` mismatch,
-more than one EDIT TARGET, and `--backend codex` (which cannot
-inpaint — use Path 3). It prints the share of the frame the mask covers; give that figure
-when you ask, so the user sees what they are paying to repaint. The
-result is re-encoded: the unmasked area is visually preserved but not byte-identical.
+more than one EDIT TARGET, and `--mask` with `--backend codex`, which cannot inpaint
+(use `reference/fixing-an-image.md` → *Path 3*). It prints the share of the frame the
+mask covers; give that figure when you ask, so the user sees what they are paying to
+repaint. The result is re-encoded: the unmasked area is visually preserved but not
+byte-identical.
 
 **No masked call has completed here.** The semantics above are from the API reference, not
 measurement — verify on the first real call that what comes back is the EDIT TARGET with
@@ -293,16 +222,14 @@ on loss is a project spend cap at OpenAI plus a small balance.
 
 ### Codex models
 
-**Availability collapsed over a few hours on 2026-09-30.** Three models stopped being
-served to Codex on a ChatGPT account, one after another, each returning:
+On 2026-09-30 three models stopped being served to Codex on a ChatGPT account within
+a few hours, each returning an HTTP 400 such as:
 
 > The 'gpt-5.6-terra' model is not supported when using Codex with a ChatGPT account.
 
-That is an upstream availability change, not a prompt or tooling fault, and `gen.py`
-fails closed on it so a refused call bills nothing. **`gpt-6-astra` is the only model
-left that reaches `image_gen`,** and is the default; every dead model is in
-`CODEX_MODELS_BROKEN`, so asking for one fails immediately with the reason instead of
-burning a call.
+That is an upstream availability change, not a prompt or tooling fault. **`gpt-6-astra`
+is the only model left that reaches `image_gen`,** and is the default; every dead model
+is in `gen.py`'s `CODEX_MODELS_BROKEN`, so asking for one fails before any call.
 
 | model | reaches `image_gen`? | as of |
 |---|---|---|
@@ -313,25 +240,21 @@ burning a call.
 | `gpt-6-luna` | no — returns no image | verified 2026-09-28 |
 | `gpt-reserve` | no — returns no image | verified 2026-09-28 |
 
-Because this changed three times in one day, **treat the table as a snapshot.** If a call
-returns that 400, that model died too: add it to `CODEX_MODELS_BROKEN`, try another, and
-update this table rather than retrying.
+**Treat the table as a snapshot**, because it changed three times in one day. If a call
+returns that 400, that model died too: rather than retrying, follow
+`reference/fixing-an-image.md` → *The bar* (Codex unavailable), which moves it to
+`CODEX_MODELS_BROKEN` and updates this table.
 
-**Do not model-shop for savings — there is nothing left to shop for**, and astra was already
-dearer than terra (per 1M tokens on 2026-09-28: astra 250 in / 1,250 out against terra's
-62.5 / 375; `gen.py`'s header carries sol's). Cost is almost entirely input context anyway: one tool call,
-~250–330 output tokens, against a fixed ~28k Codex preamble. Measured swings from 2.8k to
-34.8k tokens on identical prompts were **prompt-cache hit rate**, not model or reasoning
-effort. **Cached input is much cheaper by an amount never measured on astra** — the only
-ratio on record is terra's 10x (62.5 vs 6.25), and terra is dead, so do not quote 10x as
-astra's. Run candidates back-to-back to keep that preamble warm; it is worth far more
-than model choice ever was.
+**Do not model-shop for savings**, because no cheaper working model is left (rates are
+in `gen.py`'s header). Cost is almost entirely input context: one tool call of
+~250–330 output tokens against a fixed ~28k Codex preamble, and measured swings from
+2.8k to 34.8k tokens on identical prompts were prompt-cache hit rate. Run candidates
+back-to-back to keep that preamble cached; astra's cached-input discount has never
+been measured, so do not quote a ratio for it.
 
-### Gotchas
+### Gotchas, for anyone changing `gen.py`
 
 - `codex exec`'s `-i/--image` is variadic, so a positional prompt after it is
-  swallowed as another filename. Pass the instruction on **stdin**.
+  swallowed as another filename; `gen.py` passes the instruction on stdin.
 - Reference images reach `image_gen` through conversation context, so `-i`
-  attachment order is what establishes "image 1". There is no image argument.
-- **Never put an API key inside a package or a repo** — see *Paid calls need the user's
-  approval*, which owns where the key lives.
+  attachment order is what establishes "image 1".

@@ -4,15 +4,14 @@
 job is to route a correction to the cheapest tool that can do it. Read it **before**
 spending a generation on a fix.
 
-`reference/imagemagick.md` has the commands. `S`, `PKG` and `OUT` are as in `SKILL.md`.
+`reference/imagemagick.md` has the commands. `S`, `T`, `PKG` and `OUT` are as in
+`SKILL.md`.
 
 ## Step 0 — Diagnose before you route
 
-**Magnify the fault to 300–500% and name the actual shape on the canvas before
-choosing a path.** The user's words report a symptom, not a diagnosis: a garment
-reported as the wrong one is often the right garment painted badly, and every
-instruction aimed at the reported noun fails while the real shape goes untouched.
-Route the fault you can see, not the one you were told about.
+**Magnify the fault to 300–500% and name the actual shape on the canvas**, then route
+the fault you can see, not the one you were told about, because the user's words
+report a symptom (`SKILL.md` → *Two habits worth building*).
 
 **If the fault is a design fact, the fix must go back into `description.md`.** A pixel
 edit teaches the model nothing — the next scene reads the text and repaints the
@@ -51,7 +50,7 @@ does not.
 | A small region regeneration keeps breaking | **Path 3**, then **path 4** | Path 3 is free and usually enough; if its seam cannot be hidden, inpainting is the escalation — ask first. |
 | Rendering eroded across passes (facets rounding off) | **ImageMagick transplant** from an un-eroded version | Tonal correction cannot restore crispness; only new pixels can. |
 | A detail below ~30 px that will not converge | **Change the gesture** | Orientation is uncontrollable at that size. Pick a shape whose silhouette carries the meaning. |
-| Codex returns HTTP 400 | **Work the ladder in path 4** | That model just died. `rules.md` → *Codex models* has what to do. |
+| Codex returns HTTP 400 | **Path 4 → *The bar*, Codex unavailable** | That model just died; see `rules.md` → *Codex models*. |
 
 ## Path 1 — ImageMagick
 
@@ -60,9 +59,8 @@ giving it the mask as its alpha, and laying it over the original. The recipe,
 including the `-alpha off` trap that keeps recurring, is in
 `reference/imagemagick.md` → *Confining an operation to a region*.
 
-**Every intermediate goes to a scratch directory, never the package or the output
-folder.** `T=$(mktemp -d)` once per session, `$T` throughout. Only one kind of
-intermediate is kept, listed under *Guardrails*.
+**Every intermediate goes to `$T`, never the package or the output folder**, except the
+one kind listed under *Guardrails*.
 
 **State tonal targets as a ratio** — mean of region A ÷ mean of region B. Ratios
 survive rephrasing; "a bit darker" does not. **Record both crop boxes every time you
@@ -120,13 +118,11 @@ something the new candidate drew differently.
 
 ## Path 4 — The paid API, and the bar for spending credits
 
-**Ask the user first. Every time.** See *Never spend API credits without asking* in
-`SKILL.md`; `rules.md` → *Paid calls need the user's approval* owns the
-mechanism. One approval is one call: change anything and it needs a fresh one, because
+**Ask the user first, every time** (`rules.md` → *Paid calls need the user's
+approval*). One approval is one call, and changing anything needs a fresh one, because
 a blanket authorisation is not a yes to a specific call. When you ask, give what you
-tried, why the cheaper paths cannot do it, which `--quality` you chose, and the cost as
-an estimate. Pass their reply verbatim as `--approved-by`; `gen.py` refuses a paid
-call without it.
+tried, why the cheaper paths cannot do it, which `--quality` you chose, the mask
+coverage `gen.py --dry-run` prints, and the cost as an estimate.
 
 **What this path buys you:** `--mask` sends a mask to `/v1/images/edits` and **only
 the masked pixels regenerate**. Codex cannot inpaint; path 3 only approximates it.
@@ -137,28 +133,19 @@ python3 $S/prompt.py --package PKG --masked \
   --role STYLE:"Match its hand-painted matte rendering only." \
   --task "..." --spec-file "$T/spec.txt" -o "$T/p.txt"
 
-python3 $S/gen.py --package PKG --output OUT --scene <slug> --prompt-file "$T/p.txt" \
+python3 $S/gen.py --package PKG --output OUT --scene <scene> --prompt-file "$T/p.txt" \
   --backend api --approved-by "<the user's words>" \
-  --attach <slug>/vNNN/image.png:"EDIT TARGET" \
+  --attach <scene>/vNNN/image.png:"EDIT TARGET" \
   --attach ref_images/style_references/canonical_style_reference.png:STYLE \
-  --mask OUT/<slug>/masks/fix-the-hand.png --size 1536x1024
+  --mask OUT/<scene>/masks/fix-the-hand.png --size 1536x1024
 ```
 
-Copy that invocation exactly — `rules.md` → *Masked inpainting* has the reasons.
-`gen.py` enforces most of it. Two things the example cannot show you:
-
-- **The EDIT TARGET goes first.** This is the one call where the anchor is not image
-  1, because the endpoint masks the first image in `image[]`. With the anchor first
-  you pay and get the anchor back with a hole repainted in it, and nothing detects it
-  — the anchor and a scene candidate are both 1536x1024, so the dimension check passes.
-- **The mask is a plain greyscale mask, WHITE = repaint, never pre-inverted,**
-  and `--size` must equal the EDIT TARGET's real dimensions, not the 1536x1024 above.
-  Read them with `magick identify`. `gen.py` does **not** check polarity: it refuses an
-  all-black mask and warns above 90% coverage, so a pre-inverted mask covering 86%
-  sails through and you pay to repaint everything except the region you meant.
-
-The result is **re-encoded**: the unmasked area is preserved visually but not
-byte-identically, so the zero-pixels-changed guarantee does not transfer.
+Copy that invocation's order exactly: the EDIT TARGET goes first, because the endpoint
+masks image 1. Pass `--size` as the EDIT TARGET's real size from `magick identify`, not
+the 1536x1024 above. Check the mask is WHITE = repaint and not pre-inverted yourself,
+because `gen.py` cannot detect polarity and an inverted mask pays to repaint
+everything except the region you meant. `rules.md` → *Masked inpainting* has the
+reasons and the rest of the guards.
 
 **Try path 3 first** — free, and it hides most seams.
 

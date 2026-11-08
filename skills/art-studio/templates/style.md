@@ -4,6 +4,8 @@
 
 What this project's art looks like. The scripts read the three sections below by
 heading, so keep the headings exactly as written and put nothing else between them.
+An optional `## Legacy closing style lines` section goes after them (the art-studio
+skill's `rules.md` → *Style versioning procedure*).
 
 ## Style Block
 

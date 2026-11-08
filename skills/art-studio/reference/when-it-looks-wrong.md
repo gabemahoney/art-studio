@@ -6,8 +6,8 @@ Three separate questions, in this order:
 2. **Why did this one fail?** → *Diagnosing a style failure*
 3. **The design is right but the rendering is wrong** → *The escalation ladder*
 
-If the fault is small and local and the picture is otherwise good, you may not need
-a generation at all — see `reference/fixing-an-image.md` first.
+If the fault is small and local and the picture is otherwise good, read
+`reference/fixing-an-image.md` first, because you may not need a generation at all.
 
 ## Choosing the baseline
 
