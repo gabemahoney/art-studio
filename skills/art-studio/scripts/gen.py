@@ -496,6 +496,8 @@ def target_dir(base: Path, deleted: set[int]) -> Path:
     `deleted` is the log as read pre-flight. The log is read again here, so a
     deletion logged while the backend ran still counts; if that re-read fails, the
     image is already paid for, so warn and number from `deleted` rather than fail.
+    For the same reason, a concurrent run that creates the chosen vNNN between the
+    scan and the mkdir does not fail this one: it takes the next free number.
     """
     try:
         logged = deleted_numbers(base)
@@ -508,9 +510,14 @@ def target_dir(base: Path, deleted: set[int]) -> Path:
     used = {int(m.group(1)) for c in base.iterdir()
             if c.is_dir() and (m := re.fullmatch(r"v(\d+)", c.name))}
     used |= logged | deleted
-    out = base / f"v{max(used, default=0) + 1:03d}"
-    out.mkdir()
-    return out
+    n = max(used, default=0) + 1   # above every logged number, so counting up skips them
+    while True:
+        out = base / f"v{n:03d}"
+        try:
+            out.mkdir()
+            return out
+        except FileExistsError:   # claimed by a concurrent run since the scan
+            n += 1
 
 
 # --------------------------------------------------------------------- request
