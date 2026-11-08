@@ -1,6 +1,6 @@
 ---
 name: art-studio
-description: Make, revise and approve illustrations in one locked visual style — characters, locations, items, ships, and scenes built from them. Works against a package (the style and its recurring subjects) and an output folder (where scenes land), both given as paths. Use for all image work: setting up a package, designing a new asset, revising an approved one, composing a scene, correcting an existing image, or promoting a candidate.
+description: Make, revise and approve illustrations in one locked visual style — characters, locations, items, vehicles, and scenes built from them — so a recurring cast stays consistent across a project. Works against a package (the style and its recurring subjects) and an output folder (where scenes land), both given as paths. Use for any illustration or image-generation request, even when the skill is not named: setting up a package or style anchor, designing or revising a character or asset sheet, composing a scene, fixing or touching up a generated image, deleting or promoting a candidate. Not for charts, diagrams, UI mockups or edits to images unrelated to illustration work.
 ---
 
 # Art studio
@@ -10,9 +10,11 @@ a place, a ship, an object — persists on disk as a written design plus one app
 picture. Scenes are built only from those approved pictures, so the cast stays
 recognizable and the rendering never drifts.
 
-Never call an image tool directly and never hand-write a prompt — the four scripts in
-this skill's `scripts/` folder exist to make that impossible to get wrong. Below, `S` is
-that folder's absolute path.
+Never call an image tool directly and never hand-write a prompt, because the
+scripts in this skill's `scripts/` folder enforce what a hand-made call gets wrong.
+Below, `S` is that folder's absolute path, and `T` is a scratch directory you make once
+per session with `mktemp -d`, so intermediates never land in the package or the output
+folder.
 
 ## Two locations, always given
 
@@ -34,12 +36,13 @@ PKG/
   style_versions/          frozen style-vN.md + canonical_style_reference-vN.png
   assets/<type>/<slug>/    one folder per recurring subject
 OUT/
-  <scene>/vNNN/            image.png + generation.md, one per attempt
+  <scene>/vNNN/            image.png + generation.md (+ any delivered-WxH.png), one per attempt
   <scene>/final.png        the approved scene, + final.md
 ```
 
 `<type>` is any category you invent — `personas`, `locations`, `items`, `ships`.
-`assets/<type>/` is created on demand. `rules.md` (beside this file) is the generation
+You create `assets/<type>/<slug>/` for a new asset; `gen.py` refuses an asset folder
+that does not exist. `rules.md` (beside this file) is the generation
 contract and is the same for every package.
 
 ### What each file is for
@@ -56,7 +59,7 @@ contract and is the same for every package.
 | `prompt.md` | a note to your future self: which inputs and roles regenerate this asset's sheet | you |
 | `candidates/vNNN/image.png` | raw model output, exactly as returned. Frozen forever | `gen.py` |
 | `candidates/vNNN/generation.md` | **the receipt** — the full prompt, every input resolved to a frozen path, model, date. A replay must be reconstructable from this file alone | `gen.py` |
-| `candidates/DELETED.md` | the deletion log: one `vNNN` per candidate removed at the user's insistence (see Rules) | you |
+| `candidates/DELETED.md` | the deletion log: one `vNNN` per candidate removed at the user's insistence (see *Rules that are never optional*) | you |
 | `reference.png` | **the approved picture.** The only image a scene may build from | `promote.py` |
 | `reference.md` | the sidecar naming which candidate it came from, plus the user's approval verbatim. **Without it the asset counts as unapproved and `gen.py` refuses to attach it** | `promote.py` |
 | `sources/` | user-supplied originals, crops and composite inputs | you |
@@ -140,38 +143,41 @@ build, clothing, equipment with body sides).
 ### 3. Generate one candidate
 
 ```bash
-python3 $S/gen.py --package PKG --output OUT --scene <slug> \
+python3 $S/gen.py --package PKG --output OUT --scene <scene> \
   --prompt-file "$T/prompt.txt" --preset <name> \
   --attach ref_images/style_references/canonical_style_reference.png:STYLE \
   --attach assets/<type>/<slug>/reference.png:IDENTITY \
   --request "<the user's words, verbatim>" --mode "<what this attempt changes>"
 ```
 
-- `--asset <type>/<slug>` instead of `--scene <slug>` (and no `--output`) for an
-  asset's own sheet; the candidate goes into the package.
+- `--asset <type>/<slug>` instead of `--scene <scene>` (and no `--output`) for an
+  asset's own sheet; the candidate goes into the package's `candidates/`.
 - Relative `--attach` paths resolve against the package, then the output folder. Use an
   absolute path for anything else (a user's source image, say).
 - **`--attach` is `path:ROLE`; `--role` is `ROLE:text`.** The two are reversed. The
   order of the `--attach` flags must match the order of the `--role` flags, because
   position is the only binding the image model honors — "image 1" is a promise about
   order, not about a filename.
-- `--dry-run` validates every invariant for free: the One Rule, reference provenance,
-  the attachment cap, a dead model, the slug. Run it whenever anything is unusual.
+- `--dry-run` validates the invariants for free: the One Rule checks, reference
+  provenance, the attachment cap, a dead model, the slug. It skips the `--approved-by`
+  check a real `--backend api` call makes. Run it whenever anything is unusual.
 - `vNNN` is allocated by `gen.py` after a successful response, so a failure leaves no
-  empty folder. Never create a candidate folder and never pick a number yourself.
+  empty folder. Never create a candidate folder or pick a number yourself, except for a
+  kept local composite (`reference/fixing-an-image.md` → *Guardrails*).
 - `--preset <name>` picks a delivery spec from the package's `presets.json`.
 
-`gen.py` fails closed *before* anything is billed on any One Rule violation or a
-failed provenance check. A refusal has cost nothing — read it and fix the call.
+`gen.py` fails closed *before* anything is billed on the One Rule checks it can make
+(`rules.md` → *Tooling*) or a failed provenance check. A refusal has cost nothing — read it and fix the call.
 
 ### 4. Look at the image, then record what you see
 
 ```bash
-python3 $S/review.py OUT/<slug>/vNNN --review "<what you see, misses included>"
+python3 $S/review.py OUT/<scene>/vNNN --review "<what you see, misses included>"
 ```
 
-Actually open it. Inspect contested details at 300–500% before calling anything
-fixed — `reference/imagemagick.md` has the inspection commands.
+For an asset, pass its `candidates/vNNN` directory here and in step 6. Actually open it, and inspect contested details at 300–500% before calling anything
+fixed (see *Two habits worth building* below; `reference/imagemagick.md` → *Inspection*
+has the commands).
 
 ### 5. Show the user and give an honest read
 
@@ -183,7 +189,7 @@ correction.
 ### 6. Promote — only on explicit approval
 
 ```bash
-python3 $S/promote.py OUT/<slug>/vNNN --approval "<the user's words, verbatim>"
+python3 $S/promote.py OUT/<scene>/vNNN --approval "<the user's words, verbatim>"
 ```
 
 Copies `image.png` to `final.png` (scenes) or `reference.png` (assets), writes the
@@ -206,7 +212,7 @@ What changes between them is only step 1's text and step 3's attachments.
 |---|---|---|
 | **New asset** | `description.md` v1 | anchor as STYLE, plus the *minimum* identity input: a `sources/` original, a crop, or nothing |
 | **Revise an asset** | `description.md` bumped + snapshotted | anchor as STYLE, plus the baseline as EDIT TARGET |
-| **Scene** | a scene spec file | anchor as STYLE, plus each cast member's `reference.png` as IDENTITY |
+| **Scene** | a scene spec file | anchor as STYLE, plus **at most one** cast `reference.png` or group lineup as IDENTITY, with the rest of the cast in text (`reference/writing-prompts.md`) |
 
 **New asset, default sheet layout** (unless the user specifies one): people get
 front, three-quarter, profile and back full-body views at one consistent scale, plus
@@ -216,10 +222,10 @@ orthographic angles and detail views with a scale cue. Places get an establishin
 view, alternate angles, details. Mark invented details as provisional in
 `description.md`; never invent an established fact.
 
-**Revision: the baseline is `reference.png`** unless the user has designated a
-candidate — which they do by approving one while asking for a change. Read
-`reference/when-it-looks-wrong.md` before any revision; choosing the baseline wrong
-is the single most expensive mistake available here.
+**Revision: read `reference/when-it-looks-wrong.md` → *Choosing the baseline* first**,
+because a wrong baseline is the most expensive mistake available here. It is
+`reference.png` unless the user designated a candidate by approving it while asking
+for a change.
 
 **Scene: never invent design.** Restate it from `description.md` so the model has no
 room to improvise. If an asset has no valid `reference.png`, stop and tell the user
@@ -230,67 +236,49 @@ provenance check.
 
 - **The One Rule.** Every call attaches the anchor FIRST as STYLE, carries the full
   Style Block verbatim at the top, ends with the closing style line, and delivers the
-  prompt **byte-for-byte**. Style is never inherited from a previous output; it is
-  re-asserted on every call, including a one-word edit. `rules.md` owns the detail.
-- **Every edit re-asserts the full style.** A thin "just change X" prompt lets the
-  anchor's own subjects leak in as content — that once produced a two-panel comic
-  page with strangers in it. Keep the design, the single-image guard and the
-  no-people guard in every edit prompt.
-- **Codex rewrites prompts.** Its built-in `image_gen` "normalizes" them, silently
-  defeating the Style Block. `--backend codex` relays the prompt from disk straight
-  into the tool argument so it never passes through model tokens. Never hand prompt
-  text to Codex as instruction text.
-- **`image.png` is frozen history.** Never edit one in place, never open one in an
-  image editor — a candidate was annotated in Preview and saved over, destroying it.
-  Deliverables are derived; `reference.png` and `final.png` stay byte-identical to the
-  candidate they came from.
+  prompt **byte-for-byte**, because style re-asserted on every call cannot drift.
+  `rules.md` owns the detail and the one masked-call exception.
+- **Every edit re-asserts the full style.** Keep the design, the single-image guard and
+  the no-people guard in every edit prompt, because a thin "just change X" prompt lets
+  the anchor's own subjects leak in — that once produced a two-panel comic page with
+  strangers in it.
+- **Never hand prompt text to Codex as instruction text**, because its `image_gen`
+  rewrites prompts and silently defeats the Style Block; `gen.py` relays the prompt
+  from disk instead (`rules.md` → *Why #4 exists*).
+- **`image.png` is frozen history.** Never edit one in place or open one in an image
+  editor, because a candidate annotated in Preview and saved over was lost for good.
+  `reference.png` and `final.png` stay byte-identical to the candidate they came from.
 - **Unapproved candidates are not IDENTITY inputs** unless the user designated one as
-  a baseline. Chaining candidates compounds drift.
-- **Never delete a candidate**, even a rejected one, even if asked casually —
-  deletion destroys receipts and breaks numbering. If the user insists after being
-  warned, log each removed attempt as `vNNN`, three or more digits (`v003`; `v3` is
-  ignored), in `candidates/DELETED.md` for an asset or `OUT/<scene>/DELETED.md` for a
-  scene, and list no other `vNNN` there. `gen.py` numbers past every logged one, so
-  numbers are never reused. An unreadable log refuses the run before anything is
-  billed.
-- **At most FIVE attachments.** `gen.py` refuses a sixth before anything runs. Budget
-  the slots: anchor + baseline + identities must total five.
-- **Never spend API credits without asking.** `--backend codex` is the default and
-  bills the subscription. `--backend api` spends prepaid money, which the
-  subscription does not fund. A real paid call needs `--approved-by "<the user's
-  words>"`, and only the user can give those words — ask for each call, every time.
-  Never put an API key inside a package or a repo.
+  a baseline, because chaining candidates compounds drift.
+- **Never delete a candidate**, even a rejected one, even if asked casually, because
+  deletion destroys receipts. If the user insists after being warned, log each removed
+  attempt as `vNNN` with three or more digits (`v003`; `v3` is ignored) in
+  `candidates/DELETED.md` for an asset or `OUT/<scene>/DELETED.md` for a scene, and
+  list no other `vNNN` there, because `gen.py` numbers past every logged one.
+- **At most FIVE attachments**, so budget anchor + baseline + identities to five;
+  `gen.py` refuses a sixth before anything runs.
+- **Never spend API credits without asking.** `--backend codex`, the default, bills
+  the subscription; `--backend api` spends prepaid money and needs `--approved-by
+  "<the user's words>"` for each call, which only the user can give (`rules.md` →
+  *Paid calls need the user's approval*).
 - **Do not commit automatically.**
 
 ## Notes
 
-Read the matching reference file when you hit one of these. Each is loaded on
-purpose, not browsed.
+Read the matching reference file when you hit one of these, rather than browsing them
+all.
 
-**Writing a spec the model actually obeys** → `reference/writing-prompts.md`
-
-Prohibitions and adjectives fail; countable positive statements and in-frame
-geometric referents work. Also: why `--size` is not a constraint, how scale drifts
-upward every pass, and why stacking several multi-view sheets on a scene returns a
-character-design document.
-
-**The image came out wrong** → `reference/when-it-looks-wrong.md`
-
-Reading the user's feedback to pick a baseline ("close, just fix X" vs "wrong, try
-again"), the stale-baseline guard, diagnosing a style failure from the previous
-receipt, and the five-rung ladder for when the design is right but the rendering is
-not.
-
-**An existing image needs a correction** → `reference/fixing-an-image.md`
-
-Load this *before* spending a generation on a fix. It routes the change to the
-cheapest tool that can do it — ImageMagick, a regeneration, a generate-and-composite
-transplant, or the paid API — and carries the bar for even proposing credits.
-
-**ImageMagick commands** → `reference/imagemagick.md`
-
-Masks, tonal and colour operations, measurement, crops, deliverables, transplants,
-inspection. Everything you need to do the work `fixing-an-image.md` routes to you.
+- **Writing the `--task` line or spec file** → `reference/writing-prompts.md`: countable
+  positive statements instead of bans, aspect ratio in the body, scale drift, and the
+  one-identity-sheet limit for scenes.
+- **The image came out wrong, before any revision** → `reference/when-it-looks-wrong.md`:
+  picking the baseline from the user's words, the stale-baseline guard, diagnosing a
+  style failure, and the ladder for right design with wrong rendering.
+- **An existing image needs a correction, before spending a generation on it** →
+  `reference/fixing-an-image.md`: routes the change to the cheapest tool and sets the
+  bar for proposing credits.
+- **ImageMagick commands** → `reference/imagemagick.md`: masks, tonal work, measurement,
+  crops, deliverables, transplants, inspection.
 
 ### Two habits worth building
 

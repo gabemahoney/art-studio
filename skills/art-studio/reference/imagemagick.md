@@ -1,9 +1,8 @@
 # ImageMagick cookbook
 
-The commands behind `reference/fixing-an-image.md`. `S`, `PKG` and `OUT` are as in `SKILL.md`.
-
-`T=$(mktemp -d)` once per session, and `$T` throughout — **every intermediate goes
-there, never into the package or the output folder.**
+The commands behind `reference/fixing-an-image.md`. `S`, `T`, `PKG` and `OUT` are as in
+`SKILL.md`; **every intermediate goes to `$T`, never into the package or the output
+folder.**
 
 ## Confining an operation to a region
 

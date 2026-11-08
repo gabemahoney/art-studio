@@ -55,28 +55,16 @@ candidate, put the number in the spec, and give the model a tiebreak:
 
 `reference/imagemagick.md` has the measurement commands.
 
-## Budget the five attachment slots
+## Never stack multi-view sheets on a scene
 
-`gen.py` refuses a sixth attachment before anything runs. Left to the backend,
-`image_gen` rejects it only after consuming an orchestration turn. Anchor + baseline
-+ identities must total five.
-
-**Never stack several multi-view sheets on a SCENE.** With four sheets among five
-inputs, a scene imitated the *format* of its inputs and returned a character-design
-document. Attach the anchor, the baseline as EDIT TARGET, and **at most one** identity
-sheet — a single group lineup beats several individual sheets. Carry the rest of the
-cast in text. If an identity input contains lettering, ban reproducing its numbers.
+Attach the anchor, the baseline as EDIT TARGET, and **at most one** identity sheet, and
+carry the rest of the cast in text, because with four sheets among five inputs a scene
+imitated the *format* of its inputs and returned a character-design document. A
+single group lineup beats several individual sheets. If an identity input contains
+lettering, ban reproducing its numbers.
 
 ## Attach the minimum identity input
 
 Full source → crop → nothing. Attach the least that carries information the design
 text cannot. If a candidate resembles a source's rendering or layout more than the
 anchor's, the identity input is dominating: **describe more, attach less.**
-
-## Positional binding only
-
-Images reach the model by attachment order. "Image 1" is a promise about order, not
-about a filename, which is why `--role` and `--attach` must be given in the same
-sequence. The one exception is a masked API call, where the EDIT TARGET takes image 1
-and the anchor follows — build those with `prompt.py --masked`, and see
-`reference/fixing-an-image.md`.
