@@ -333,7 +333,8 @@ def frozen_equivalent(path: Path) -> str:
         return rel_of(frozen)
     if path.name == "reference.png":
         return rel_of(validate_reference(path))
-    return "already frozen" if "/candidates/" in rel or "/sources/" in rel else "n/a"
+    parts = Path(rel.split(":", 1)[-1]).parts   # output:sources/x.png has no leading /
+    return "already frozen" if "candidates" in parts or "sources" in parts else "n/a"
 
 
 def parse_attach(spec: str) -> tuple[Path, str]:
@@ -363,7 +364,8 @@ def check_inputs(attachments: list[tuple[Path, str]], masked: bool = False) -> N
             "Refusing here rather than letting the backend reject it, which "
             "consumes an orchestration turn first.\n"
             "  Budget the slots: anchor + baseline + identities must total five. "
-            "A single group lineup beats several individual sheets."
+            "A scene attaches one single-view crop per cast member, never a "
+            "multi-view sheet; carry anyone beyond the cap in text."
         )
     rels = [rel_of(p) for p, _ in attachments]
     anchors = [is_anchor(p) for p, _ in attachments]

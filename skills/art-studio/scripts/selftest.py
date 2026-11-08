@@ -333,6 +333,16 @@ def run_checks(tmp: Path) -> int:
                f"before: {sorted(c.name for c in base.iterdir() if c != got)}")
     gen.PKG = gen.OUT = None
 
+    # --- a cast crop in the output folder's top-level sources/ is already frozen
+    crop = out / "sources/tester-crop.png"
+    crop.parent.mkdir()
+    magick("-size", "300x600", "xc:#888888", str(crop))
+    gen.set_locations(pkg, out)
+    got = gen.frozen_equivalent(crop)
+    gen.PKG = gen.OUT = None
+    report("a crop under output:sources/ is recorded as already frozen",
+           got == "already frozen", f"got {got!r}")
+
     # --- real main() runs into a scene, in-process, with the backend and key stubbed;
     # nothing is sent and nothing is billed
     png = (pkg / "assets/people/tester/candidates/v001/image.png").read_bytes()
