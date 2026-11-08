@@ -448,19 +448,66 @@ def check_target(asset: str | None, scene: str | None) -> Path:
                        "written into the package. Drop --output.")
         if not (PKG / "assets" / asset).is_dir():
             raise Fail(f"no such asset: {PKG / 'assets' / asset}")
-        return PKG / "assets" / asset / "candidates"
+        return writable_base(PKG / "assets" / asset / "candidates")
     if OUT is None:
         raise Fail("--scene needs --output: the folder this render is delivered to")
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", scene):
         raise Fail(f"scene slug {scene!r}: use lowercase letters, digits, . _ -")
-    return OUT / scene
+    return writable_base(OUT / scene)
 
 
-def target_dir(base: Path) -> Path:
-    """Allocate and create the next vNNN under base."""
+def writable_base(base: Path) -> Path:
+    """base, refused pre-flight if it or its nearest existing ancestor is not a
+    directory: the run could not create its vNNN folder there after billing."""
+    for p in (base, *base.parents):
+        if p.exists():
+            if not p.is_dir():
+                raise Fail(f"{p} is not a directory, so {base} cannot hold attempt "
+                           "folders. Move it aside and rerun.")
+            break
+    return base
+
+
+def deleted_numbers(base: Path) -> set[int]:
+    """The attempt numbers base/DELETED.md records as vNNN tokens (empty if no log).
+
+    Numbers are never reused: an attempt deleted at the user's insistence is logged
+    there, and numbering continues past it. Read pre-flight, so a log the run cannot
+    read refuses the run before anything is billed rather than after.
+    """
+    log = base / "DELETED.md"
+    try:
+        text = log.read_text(errors="replace")
+    except FileNotFoundError:
+        return set()
+    except OSError as e:
+        fail = Fail(f"cannot read the deletion log {log} ({e.strerror or e}). It must be "
+                    "a readable file listing removed attempts as vNNN; fix it (e.g. "
+                    "chmod u+r) and rerun.")
+        fail.reason = e.strerror or str(e)
+        raise fail from None
+    return {int(n) for n in re.findall(r"\bv(\d{3,})\b", text)}
+
+
+def target_dir(base: Path, deleted: set[int]) -> Path:
+    """Allocate and create the next vNNN under base, past every folder on disk and
+    every number in base/DELETED.md.
+
+    `deleted` is the log as read pre-flight. The log is read again here, so a
+    deletion logged while the backend ran still counts; if that re-read fails, the
+    image is already paid for, so warn and number from `deleted` rather than fail.
+    """
+    try:
+        logged = deleted_numbers(base)
+    except Fail as e:
+        print(f"  warn: could not re-read {base / 'DELETED.md'} after generating "
+              f"({e.reason}); numbering from the log as read before generating. Fix "
+              "the log before the next run.", file=sys.stderr)
+        logged = set()
     base.mkdir(parents=True, exist_ok=True)
     used = {int(m.group(1)) for c in base.iterdir()
             if c.is_dir() and (m := re.fullmatch(r"v(\d+)", c.name))}
+    used |= logged | deleted
     out = base / f"v{max(used, default=0) + 1:03d}"
     out.mkdir()
     return out
@@ -877,6 +924,7 @@ def main() -> int:
 
     # Everything that can fail must fail here, before anything is billed.
     base = check_target(args.asset, args.scene)
+    deleted = deleted_numbers(base)
     require_binary("magick", "install ImageMagick (brew install imagemagick)")
     if args.backend == "codex":
         require_binary("codex", "install the Codex CLI, or use --backend api")
@@ -971,7 +1019,7 @@ def main() -> int:
     if api_mask is not None:
         api_mask.unlink(missing_ok=True)   # converted copy; the user mask is the record
 
-    out = target_dir(base)
+    out = target_dir(base, deleted)
     raw = out / "image.png"
     raw.write_bytes(blob)
     print(f"  wrote {raw}")

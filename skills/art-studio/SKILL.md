@@ -56,17 +56,20 @@ contract and is the same for every package.
 | `prompt.md` | a note to your future self: which inputs and roles regenerate this asset's sheet | you |
 | `candidates/vNNN/image.png` | raw model output, exactly as returned. Frozen forever | `gen.py` |
 | `candidates/vNNN/generation.md` | **the receipt** — the full prompt, every input resolved to a frozen path, model, date. A replay must be reconstructable from this file alone | `gen.py` |
+| `candidates/DELETED.md` | the deletion log: one `vNNN` per candidate removed at the user's insistence (see Rules) | you |
 | `reference.png` | **the approved picture.** The only image a scene may build from | `promote.py` |
 | `reference.md` | the sidecar naming which candidate it came from, plus the user's approval verbatim. **Without it the asset counts as unapproved and `gen.py` refuses to attach it** | `promote.py` |
 | `sources/` | user-supplied originals, crops and composite inputs | you |
 | **per scene** — `OUT/<scene>/` | | |
 | `vNNN/image.png` + `vNNN/generation.md` | exactly like an asset's candidates | `gen.py` |
+| `DELETED.md` | the deletion log, as for an asset | you |
 | `final.png` + `final.md` | the approved scene and its sidecar | `promote.py` |
 
 Two kinds of file, and the distinction is the whole design: **heads** are mutable and
 hold the current state (`description.md`, `reference.png`, `final.png`, `style.md`).
 **Revisions** are written once and never touched again (everything under
-`candidates/`, `OUT/<scene>/vNNN/`, `*_versions/`, `sources/`).
+`candidates/`, `OUT/<scene>/vNNN/`, `*_versions/`, `sources/`), except the deletion
+log `DELETED.md`, which is appended to.
 
 **Status is never recorded separately — the files are the status.**
 
@@ -245,8 +248,11 @@ provenance check.
   a baseline. Chaining candidates compounds drift.
 - **Never delete a candidate**, even a rejected one, even if asked casually —
   deletion destroys receipts and breaks numbering. If the user insists after being
-  warned, record the removed numbers in `candidates/DELETED.md`; numbers are never
-  reused, so the next candidate continues from the highest ever used.
+  warned, log each removed attempt as `vNNN`, three or more digits (`v003`; `v3` is
+  ignored), in `candidates/DELETED.md` for an asset or `OUT/<scene>/DELETED.md` for a
+  scene, and list no other `vNNN` there. `gen.py` numbers past every logged one, so
+  numbers are never reused. An unreadable log refuses the run before anything is
+  billed.
 - **At most FIVE attachments.** `gen.py` refuses a sixth before anything runs. Budget
   the slots: anchor + baseline + identities must total five.
 - **Never spend API credits without asking.** `--backend codex` is the default and

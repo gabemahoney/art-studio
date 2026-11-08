@@ -5,8 +5,9 @@ generating anything.
   python3 -I scripts/selftest.py
 
 Builds a throwaway package and output folder in a temp directory, so it needs no
-real package and touches none. gen.py runs under --dry-run, or fails before any
-call is made; no image is generated and nothing is billed. Run it after touching
+real package and touches none. gen.py runs under --dry-run, fails before any
+call is made, or runs in-process with its backend and key stubbed; no image is
+generated and nothing is billed. Run it after touching
 anything in scripts/.
 
 Each case asserts that a specific invariant FAILS CLOSED. A guard that stops firing
@@ -19,6 +20,9 @@ import sys
 
 sys.dont_write_bytecode = True
 
+import base64
+import contextlib
+import io
 import os
 import shutil
 import subprocess
@@ -26,6 +30,10 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+import gen  # noqa: E402
+
 ANCHOR = "ref_images/style_references/canonical_style_reference.png"
 
 STYLE_MD = """# Selftest style
@@ -300,6 +308,97 @@ def run_checks(tmp: Path) -> int:
                        "--replace", "--dry-run")
     report("promote.py targets reference.png for an asset candidate", code == 0
            and "reference.png" in msg, msg)
+
+    # --- vNNN numbering never reuses a number recorded in DELETED.md, even one logged
+    # after main()'s pre-flight read (while the backend ran); only vNNN tokens count
+    for name, asset, scene, folders, logged, expect in [
+        ("asset numbering skips a deleted v003", "people/tester", None, (1, 2), "v003",
+         "v004"),
+        ("folders above every DELETED.md entry still count", None, "scene-b", (1, 3, 5),
+         "v002 v004", "v006"),
+        ("numbering skips every DELETED.md entry, across a gap", None, "scene-c", (1, 2),
+         "v003 v007", "v008"),
+        ("log token v12 is ignored, v010 counts", None, "scene-d", (1,), "v12 v010",
+         "v011"),
+    ]:
+        gen.PKG = gen.OUT = None
+        gen.set_locations(pkg, out if scene else None)
+        base = gen.check_target(asset, scene)
+        for n in folders:
+            (base / f"v{n:03d}").mkdir(parents=True, exist_ok=True)
+        (base / "DELETED.md").write_text("# Deleted attempts\n\n" + "".join(
+            f"- {v}: deleted at the user's insistence\n" for v in logged.split()))
+        got = gen.target_dir(base, set())   # empty pre-flight read: the log came later
+        report(name, got.name == expect, f"allocated {got.name}, expected {expect}; "
+               f"before: {sorted(c.name for c in base.iterdir() if c != got)}")
+    gen.PKG = gen.OUT = None
+
+    # --- a real main() run whose log becomes unreadable while the backend runs: the
+    # image is paid for, so main() warns and numbers past its pre-flight read. The
+    # backend and key are stubbed in-process; nothing is sent and nothing is billed.
+    base = out / "scene-e"
+    (base / "v001").mkdir(parents=True)
+    (base / "DELETED.md").write_text("- v009: deleted at the user's insistence\n")
+    png = (pkg / "assets/people/tester/candidates/v001/image.png").read_bytes()
+
+    def fake_generate(*_args, **_kw) -> dict:
+        (base / "DELETED.md").unlink()
+        (base / "DELETED.md").mkdir()
+        return {"data": [{"b64_json": base64.b64encode(png).decode()}]}
+
+    def no_codex(*_args, **_kw):
+        raise AssertionError("selftest must never reach the codex backend")
+
+    saved = (sys.argv, gen.api_key, gen.generate, gen.generate_codex)
+    sys.argv = ["gen.py", *P, *O, "--scene", "scene-e", "--prompt-file", str(prompt),
+                *A, *I, *API, "--approved-by", "test"]
+    gen.api_key, gen.generate, gen.generate_codex = (lambda: "selftest-key"), \
+        fake_generate, no_codex
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            result = f"exit {gen.main()}"
+    except (gen.Fail, SystemExit) as e:
+        result = f"{type(e).__name__}: {e}"
+    finally:
+        sys.argv, gen.api_key, gen.generate, gen.generate_codex = saved
+        gen.PKG = gen.OUT = None
+    got = sorted(c.name for c in base.iterdir())
+    report("main() numbers past its pre-flight log read when the log turns unreadable",
+           result == "exit 0" and got == ["DELETED.md", "v001", "v010"]
+           and (base / "v010/image.png").exists()
+           and "warn: could not re-read" in err.getvalue()
+           and "rerun" not in err.getvalue(),   # the image is paid for: no rerun advice
+           f"{result}; folders {got}, expected v010 beside v001; "
+           f"stderr: {err.getvalue()!r}")
+
+    # --- an unreadable DELETED.md refuses the run pre-flight, before anything is billed
+    base = out / "scene-f"
+    (base / "DELETED.md").mkdir(parents=True)   # unreadable even under root, unlike chmod 000
+    before = sorted(base.iterdir())
+    code, msg = script("gen.py", *P, *O, "--scene", "scene-f", "--prompt-file", str(prompt),
+                       *A, *I, *DRY)
+    report("unreadable DELETED.md refuses a dry run pre-flight",
+           code != 0 and "cannot read the deletion log" in msg
+           and sorted(base.iterdir()) == before,
+           f"exit {code}:\n{msg}")
+
+    # --- the attempt folder, or a parent of it, is a file: not a permissions problem
+    (pkg / "assets/people/spare").mkdir()
+    (pkg / "assets/people/spare/candidates").write_text("")
+    (out / "scene-g").write_text("")
+    (tmp / "out-file").write_text("")
+    for name, target in [
+        ("an asset attempt folder that is a file", ["--asset", "people/spare"]),
+        ("a scene attempt folder that is a file", O + ["--scene", "scene-g"]),
+        ("a scene under an --output that is a file",
+         ["--output", str(tmp / "out-file"), "--scene", "x"]),
+    ]:
+        before = sorted(tmp.rglob("*"))
+        code, msg = script("gen.py", *P, *target, "--prompt-file", str(prompt), *A, *I, *DRY)
+        report(f"{name} refuses a dry run",
+               code != 0 and "not a directory" in msg and "chmod" not in msg
+               and sorted(tmp.rglob("*")) == before, f"exit {code}:\n{msg}")
 
     print(f"\n  {checks - failures}/{checks} checks passed")
     return 1 if failures else 0
