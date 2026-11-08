@@ -24,6 +24,7 @@ import base64
 import contextlib
 import io
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -351,10 +352,10 @@ def run_checks(tmp: Path) -> int:
     def no_codex(*_args, **_kw):
         raise AssertionError("selftest must never reach the codex backend")
 
-    def stubbed_main(scene: str, fake_generate) -> tuple[str, str]:
-        """Run gen.main() on the api backend into scene; return its result and stderr."""
+    def stubbed_main(target: list[str], fake_generate) -> tuple[str, str]:
+        """Run gen.main() on the api backend into target; return its result and stderr."""
         saved = (sys.argv, gen.api_key, gen.generate, gen.generate_codex)
-        sys.argv = ["gen.py", *P, *O, "--scene", scene, "--prompt-file", str(prompt),
+        sys.argv = ["gen.py", *P, *target, "--prompt-file", str(prompt),
                     *A, *I, *API, "--approved-by", "test"]
         gen.api_key, gen.generate, gen.generate_codex = (lambda: "selftest-key"), \
             fake_generate, no_codex
@@ -380,7 +381,7 @@ def run_checks(tmp: Path) -> int:
         (base / "DELETED.md").mkdir()
         return response
 
-    result, err = stubbed_main("scene-e", fake_generate)
+    result, err = stubbed_main(O + ["--scene", "scene-e"], fake_generate)
     got = sorted(c.name for c in base.iterdir())
     report("main() numbers past its pre-flight log read when the log turns unreadable",
            result == "exit 0" and got == ["DELETED.md", "v001", "v010"]
@@ -403,7 +404,7 @@ def run_checks(tmp: Path) -> int:
 
     Path.mkdir = rival_claims_v002
     try:
-        result, err = stubbed_main("scene-h", lambda *_args, **_kw: response)
+        result, err = stubbed_main(O + ["--scene", "scene-h"], lambda *_args, **_kw: response)
     finally:
         Path.mkdir = real_mkdir
     got = sorted(c.name for c in base.iterdir())
@@ -471,6 +472,80 @@ def run_checks(tmp: Path) -> int:
     report("--refinish without a receipt is refused and writes nothing",
            code != 0 and "no generation.md" in msg
            and sorted(c.name for c in vdir.iterdir()) == ["image.png"], f"exit {code}:\n{msg}")
+
+    # --- an attempt folder, or the folder that must hold it, that cannot be written:
+    # refused pre-flight in a dry run and a real run, before the backend is called
+    calls = []
+
+    def counted(*_args, **_kw) -> dict:
+        calls.append(1)
+        return response
+
+    (pkg / "assets/people/linked").mkdir()
+    (pkg / "assets/people/linked/candidates").symlink_to(tmp / "nowhere")
+    (out / "scene-ro/v001").mkdir(parents=True)
+    (out / "scene-link").symlink_to(tmp / "nowhere")
+    (tmp / "ro-out").mkdir()
+    read_only = [pkg / "assets/people/tester/candidates", out / "scene-ro", tmp / "ro-out"]
+    root = os.geteuid() == 0   # root ignores permission bits: chmod cases cannot fail
+    for p in read_only:
+        p.chmod(0o555)
+    try:
+        for name, target, blocker, needs_chmod in [
+            ("asset candidates/ read-only", ["--asset", "people/tester"],
+             "people/tester/candidates", True),
+            ("asset candidates/ broken symlink", ["--asset", "people/linked"],
+             "people/linked/candidates", False),
+            ("scene folder read-only", O + ["--scene", "scene-ro"], "out/scene-ro", True),
+            ("scene folder broken symlink", O + ["--scene", "scene-link"], "out/scene-link",
+             False),
+            ("scene under a read-only --output",
+             ["--output", str(tmp / "ro-out"), "--scene", "new"], "ro-out", True),
+        ]:
+            if needs_chmod and root:
+                print(f"  skip: {name} (running as root)")
+                continue
+            before = sorted(tmp.rglob("*"))
+            code, msg = script("gen.py", *P, *target, "--prompt-file", str(prompt),
+                               *A, *I, *API, *DRY)
+            calls.clear()
+            result, err = stubbed_main(target, counted)
+            report(f"unwritable target refused pre-flight: {name}",
+                   code != 0 and "FAIL:" in msg and blocker in msg
+                   and result.startswith("Fail: ") and blocker in result and not calls
+                   and sorted(tmp.rglob("*")) == before,
+                   f"expected a Fail naming {blocker}; backend called {len(calls)}x\n"
+                   f"main(): {result}\ndry run exit {code}: {msg}")
+    finally:
+        for p in read_only:
+            p.chmod(0o755)
+
+    # --- the target turns unwritable while the backend runs: the image is paid for,
+    # so main() saves it under the system temp dir, names it, and still fails
+    base = out / "scene-i"
+    (base / "v001").mkdir(parents=True)
+
+    def target_breaks(*_args, **_kw) -> dict:
+        shutil.rmtree(base)
+        base.symlink_to(tmp / "nowhere")   # unwritable even under root, unlike chmod
+        return response
+
+    result, err = stubbed_main(O + ["--scene", "scene-i"], target_breaks)
+    temp, ours = os.path.realpath(tempfile.gettempdir()), os.path.realpath(tmp)
+    named = [Path(p) for m in re.findall(r"/[^\s'\"`,;()]+", result)
+             if (p := os.path.realpath(m.rstrip(".:"))).startswith(temp + os.sep)
+             and not p.startswith(ours + os.sep) and os.path.exists(p)]
+    kept = [p for p in named if (k := p / "image.png" if p.is_dir() else p).is_file()
+            and k.read_bytes() == png]
+    report("an image whose target breaks after generating is saved to the temp dir",
+           result.startswith("Fail: ") and kept,
+           f"{result}; expected a Fail naming a file under {temp} holding the image; "
+           f"stderr: {err!r}")
+    for p in kept:   # outside tmp, so main()'s cleanup would miss it
+        shutil.rmtree(p) if p.is_dir() else p.unlink()
+        if str(p.parent) != temp:
+            with contextlib.suppress(OSError):
+                p.parent.rmdir()   # an emptied per-run fallback folder; never a full one
 
     print(f"\n  {checks - failures}/{checks} checks passed")
     return 1 if failures else 0

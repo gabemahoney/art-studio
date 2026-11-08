@@ -460,12 +460,19 @@ def check_target(asset: str | None, scene: str | None) -> Path:
 
 def writable_base(base: Path) -> Path:
     """base, refused pre-flight if it or its nearest existing ancestor is not a
-    directory: the run could not create its vNNN folder there after billing."""
+    writable directory, or a broken symlink stands in the way: the run could not
+    create its vNNN folder there after billing."""
     for p in (base, *base.parents):
+        if p.is_symlink() and not p.exists():
+            raise Fail(f"{p} is a broken symlink, so {base} cannot hold attempt "
+                       "folders. Fix or remove the link and rerun.")
         if p.exists():
             if not p.is_dir():
                 raise Fail(f"{p} is not a directory, so {base} cannot hold attempt "
                            "folders. Move it aside and rerun.")
+            if not os.access(p, os.W_OK | os.X_OK):
+                raise Fail(f"{p} is not writable, so {base} cannot hold attempt "
+                           "folders. Fix its permissions (e.g. chmod u+wx) and rerun.")
             break
     return base
 
@@ -1052,9 +1059,19 @@ def main() -> int:
     if api_mask is not None:
         api_mask.unlink(missing_ok=True)   # converted copy; the user mask is the record
 
-    out = target_dir(base, deleted)
-    raw = out / "image.png"
-    raw.write_bytes(blob)
+    try:
+        out = target_dir(base, deleted)
+        raw = out / "image.png"
+        raw.write_bytes(blob)
+    except OSError as e:
+        # Pre-flight passed but the target broke while the backend ran. The image is
+        # paid for: keep it in the system temp dir rather than lose it.
+        fd, kept = tempfile.mkstemp(prefix="gen-unsaved-", suffix=".png")
+        with os.fdopen(fd, "wb") as f:
+            f.write(blob)
+        raise Fail(f"could not save the generated image under {base} "
+                   f"({e.strerror or e}). It was saved to {kept} instead; no receipt "
+                   "was written. Fix the target before the next run.") from None
     print(f"  wrote {raw}")
 
     delivered = None
