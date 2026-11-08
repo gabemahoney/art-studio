@@ -333,44 +333,77 @@ def run_checks(tmp: Path) -> int:
                f"before: {sorted(c.name for c in base.iterdir() if c != got)}")
     gen.PKG = gen.OUT = None
 
-    # --- a real main() run whose log becomes unreadable while the backend runs: the
-    # image is paid for, so main() warns and numbers past its pre-flight read. The
-    # backend and key are stubbed in-process; nothing is sent and nothing is billed.
-    base = out / "scene-e"
-    (base / "v001").mkdir(parents=True)
-    (base / "DELETED.md").write_text("- v009: deleted at the user's insistence\n")
+    # --- real main() runs into a scene, in-process, with the backend and key stubbed;
+    # nothing is sent and nothing is billed
     png = (pkg / "assets/people/tester/candidates/v001/image.png").read_bytes()
-
-    def fake_generate(*_args, **_kw) -> dict:
-        (base / "DELETED.md").unlink()
-        (base / "DELETED.md").mkdir()
-        return {"data": [{"b64_json": base64.b64encode(png).decode()}]}
+    response = {"data": [{"b64_json": base64.b64encode(png).decode()}]}
 
     def no_codex(*_args, **_kw):
         raise AssertionError("selftest must never reach the codex backend")
 
-    saved = (sys.argv, gen.api_key, gen.generate, gen.generate_codex)
-    sys.argv = ["gen.py", *P, *O, "--scene", "scene-e", "--prompt-file", str(prompt),
-                *A, *I, *API, "--approved-by", "test"]
-    gen.api_key, gen.generate, gen.generate_codex = (lambda: "selftest-key"), \
-        fake_generate, no_codex
-    err = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-            result = f"exit {gen.main()}"
-    except (gen.Fail, SystemExit) as e:
-        result = f"{type(e).__name__}: {e}"
-    finally:
-        sys.argv, gen.api_key, gen.generate, gen.generate_codex = saved
-        gen.PKG = gen.OUT = None
+    def stubbed_main(scene: str, fake_generate) -> tuple[str, str]:
+        """Run gen.main() on the api backend into scene; return its result and stderr."""
+        saved = (sys.argv, gen.api_key, gen.generate, gen.generate_codex)
+        sys.argv = ["gen.py", *P, *O, "--scene", scene, "--prompt-file", str(prompt),
+                    *A, *I, *API, "--approved-by", "test"]
+        gen.api_key, gen.generate, gen.generate_codex = (lambda: "selftest-key"), \
+            fake_generate, no_codex
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                result = f"exit {gen.main()}"
+        except (Exception, SystemExit) as e:   # a stray exception is a failure, not a crash
+            result = f"{type(e).__name__}: {e}"
+        finally:
+            sys.argv, gen.api_key, gen.generate, gen.generate_codex = saved
+            gen.PKG = gen.OUT = None
+        return result, err.getvalue()
+
+    # the log becomes unreadable while the backend runs: the image is paid for, so
+    # main() warns and numbers past its pre-flight read
+    base = out / "scene-e"
+    (base / "v001").mkdir(parents=True)
+    (base / "DELETED.md").write_text("- v009: deleted at the user's insistence\n")
+
+    def fake_generate(*_args, **_kw) -> dict:
+        (base / "DELETED.md").unlink()
+        (base / "DELETED.md").mkdir()
+        return response
+
+    result, err = stubbed_main("scene-e", fake_generate)
     got = sorted(c.name for c in base.iterdir())
     report("main() numbers past its pre-flight log read when the log turns unreadable",
            result == "exit 0" and got == ["DELETED.md", "v001", "v010"]
            and (base / "v010/image.png").exists()
-           and "warn: could not re-read" in err.getvalue()
-           and "rerun" not in err.getvalue(),   # the image is paid for: no rerun advice
-           f"{result}; folders {got}, expected v010 beside v001; "
-           f"stderr: {err.getvalue()!r}")
+           and "warn: could not re-read" in err
+           and "rerun" not in err,   # the image is paid for: no rerun advice
+           f"{result}; folders {got}, expected v010 beside v001; stderr: {err!r}")
+
+    # a concurrent run claims v002 between this run's scan and its mkdir: this run
+    # takes the next free number and keeps its paid-for image
+    base = out / "scene-h"
+    (base / "v001").mkdir(parents=True)
+    real_mkdir = Path.mkdir
+
+    def rival_claims_v002(self, *args, **kw):
+        if self.name == "v002" and self.parent.name == "scene-h" and not self.exists():
+            real_mkdir(self)
+            (self / "image.png").write_bytes(b"rival image")
+        return real_mkdir(self, *args, **kw)
+
+    Path.mkdir = rival_claims_v002
+    try:
+        result, err = stubbed_main("scene-h", lambda *_args, **_kw: response)
+    finally:
+        Path.mkdir = real_mkdir
+    got = sorted(c.name for c in base.iterdir())
+    report("a run that loses its vNNN to a concurrent run takes the next and keeps its image",
+           result == "exit 0" and got == ["v001", "v002", "v003"]
+           and (base / "v002/image.png").read_bytes() == b"rival image"
+           and (base / "v003/image.png").read_bytes() == png
+           and (base / "v003/generation.md").exists(),
+           f"{result}; folders {got}, expected v003 beside the other run's v002; "
+           f"stderr: {err!r}")
 
     # --- an unreadable DELETED.md refuses the run pre-flight, before anything is billed
     base = out / "scene-f"
