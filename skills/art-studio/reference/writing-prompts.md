@@ -55,13 +55,27 @@ candidate, put the number in the spec, and give the model a tiebreak:
 
 `reference/imagemagick.md` has the measurement commands.
 
-## Never stack multi-view sheets on a scene
+## Give a scene one single-view crop per cast member
 
-Attach the anchor, the baseline as EDIT TARGET, and **at most one** identity sheet, and
-carry the rest of the cast in text, because with four sheets among five inputs a scene
-imitated the *format* of its inputs and returned a character-design document. A
-single group lineup beats several individual sheets. If an identity input contains
-lettering, ban reproducing its numbers.
+Attach the anchor, then one IDENTITY crop per cast member: one full-body view cut from
+the approved `reference.png` with ImageMagick (`reference/imagemagick.md` → *Crop,
+resize, deliverables*), with no expression portraits, other views or lettering, saved
+to the output folder's `sources/`. **Never attach a multi-view sheet to a scene**,
+because a scene given four sheets among five inputs once copied their *format* and
+returned a character-design page, while in a controlled comparison single-view crops
+matched or beat sheets and a lineup on likeness and never did that.
+
+- Pick the view closest to the pose the scene needs, because the model copies the
+  crop's stance.
+- State relative heights in the spec, because crops carry no scale.
+- The five-attachment cap leaves room for four crops beside the anchor, three if a
+  baseline rides along as EDIT TARGET; carry anyone beyond that in text.
+- Keep the single-image guard in the spec ("one single continuous scene painting, not
+  a character sheet; each person appears exactly once"), because it may be doing much
+  of the protective work.
+- Use a group lineup only when height is the point, and check it against the
+  individual sheets, because the scene inherits the lineup's own drift and stiff row.
+  If it carries lettering, ban reproducing its numbers.
 
 ## Attach the minimum identity input
 
