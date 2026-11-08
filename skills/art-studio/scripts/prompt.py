@@ -5,9 +5,10 @@ Style must dominate, so the order is fixed and not up to whoever is typing:
 
   1. Style Block, verbatim from style.md      (One Rule #2)
   2. image role declarations, by NUMBER       (rules.md, image input roles)
-  3. design text — what the subject IS
-  4. scene / layout / framing spec
-  5. closing style line, verbatim             (One Rule #3)
+  3. TASK: line — what to produce
+  4. design text — what the subject IS
+  5. scene / layout / framing spec
+  6. closing style line, verbatim             (One Rule #3)
 
 Writing prompts by hand is how the Style Block drifts and how the closing line
 gets paraphrased. Build them here instead; gen.py then re-validates the
