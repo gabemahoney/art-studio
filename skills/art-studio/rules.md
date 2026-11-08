@@ -54,7 +54,8 @@ Codex, not what the image model saw, so treat those as approximate.
 
 **Assembly order, because style must dominate:** Style Block first, then the image
 roles, the `TASK:` line, design text, layout or scene spec, and the closing style line
-last; `prompt.py` builds this order. Design wording names materials and colors, not
+last; `prompt.py` builds this order. Roles go at the top of the prompt *body*, never
+above the Block. Design wording names materials and colors, not
 finish, because the Style Block owns finish.
 
 Declare every attached image at the top of the prompt by NUMBER and exactly one
@@ -127,8 +128,11 @@ their arguments, so they run from anywhere.
 
 - **`prompt.py`** emits the sections in the mandated order: Style Block, image roles
   by number, `TASK:`, design text, spec, closing line.
-- **`gen.py`** refuses to run, before anything is billed, on a One Rule violation, a
-  `reference.png` failing validation, or a live style differing from its frozen copy.
+- **`gen.py`** refuses to run, before anything is billed, when the anchor is not image
+  1 as STYLE, the Style Block is missing from the prompt, or the closing style line is
+  not last; on a `reference.png` failing validation; or on a live style differing from
+  its frozen copy. It cannot check that the Block is at the top or that `--role` order
+  matches `--attach` order, so `prompt.py` and you own those.
   **`selftest.py`'s cases are the authoritative list of its refusals**, because a list
   here goes stale. `--refinish <vNNN dir>` re-derives a deliverable from an existing
   `image.png` without generating anything.
@@ -185,7 +189,8 @@ passes. `check_inputs()` enforces the inversion for masked calls and keeps the n
 everywhere else. The Style Block still reaches the model verbatim, and only masked pixels
 regenerate, so the target's surrounding pixels carry the rendering.
 
-Build the prompt with `prompt.py --masked`: it puts the EDIT TARGET first and emits
+Build the prompt with `prompt.py --masked`: it requires the EDIT TARGET as the first
+role and emits
 the masked closing style line from `style.md`, which names the anchor by role rather than
 by index. `check_prompt()` requires the matching line for the call type and refuses either
 mismatch, so a prompt that contradicts its own payload cannot be sent.
@@ -193,7 +198,8 @@ mismatch, so a prompt that contradicts its own payload cannot be sent.
 **`--quality` defaults to `high`** (`low`/`medium`/`high`/`xhigh`/`max`/`auto`) and is the
 cost lever inside the $0.05–0.35 estimate, so say which you chose when you ask.
 `--size` must equal the EDIT TARGET's own dimensions, because the mask is aligned to
-that image; its 1536x1024 default is wrong for portrait and oversized candidates, so
+that image; its default (1536x1024, or a preset's size) is wrong for portrait and
+oversized candidates, so
 read the real size with `magick identify` and pass it.
 
 The call also fails closed on an alpha-carrying mask, a dimension or `--size` mismatch,
@@ -214,8 +220,8 @@ without `--approved-by "<the user's words>"`: ask first, for that specific call,
 their approval verbatim — it is recorded in the receipt. Approval for one call never
 covers the next.
 
-The key comes from `OPENAI_API_KEY`, or from `~/.config/art-studio/openai.key` — outside
-every repo and every package, so it can never be committed or shipped with one.
+The key comes from `OPENAI_API_KEY`, or from `~/.config/art-studio/openai.key`. **Never
+put a key inside a package or a repo**, so it can never be committed or shipped with one.
 **Never put a key on a shell command line** (`echo sk-... > file` writes it into shell
 history permanently); a key that has ever appeared in one must be rotated. The real bound
 on loss is a project spend cap at OpenAI plus a small balance.
@@ -241,9 +247,9 @@ is in `gen.py`'s `CODEX_MODELS_BROKEN`, so asking for one fails before any call.
 | `gpt-reserve` | no — returns no image | verified 2026-09-28 |
 
 **Treat the table as a snapshot**, because it changed three times in one day. If a call
-returns that 400, that model died too: rather than retrying, follow
-`reference/fixing-an-image.md` → *The bar* (Codex unavailable), which moves it to
-`CODEX_MODELS_BROKEN` and updates this table.
+returns that 400, that model died too: rather than switching models, follow
+`reference/fixing-an-image.md` → *The bar* (Codex unavailable), which ends by moving
+it to `CODEX_MODELS_BROKEN` and updating this table.
 
 **Do not model-shop for savings**, because no cheaper working model is left (rates are
 in `gen.py`'s header). Cost is almost entirely input context: one tool call of

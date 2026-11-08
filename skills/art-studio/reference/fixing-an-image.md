@@ -43,7 +43,7 @@ does not.
 | Crop, set DPI, shrink an over-budget file | **ImageMagick**, by hand | `--refinish` does none of the three — it only *warns* about size. |
 | Wrong aspect ratio came back | **Regenerate**, stating the ratio in the prompt body | `--size` is advisory on Codex; `--refinish` would just pad it. |
 | Remove something whose covering texture is flat and adjacent | **ImageMagick** | Clone from the same image. |
-| Move a *correct* region from one candidate to another | **ImageMagick** | See *Transplants*. |
+| Move a *correct* region from one candidate to another | **ImageMagick** | See `reference/imagemagick.md` → *Transplants between candidates*. |
 | Tighter crop from pixels already present | **ImageMagick** | Crop, then upscale. |
 | Pose, expression, added objects, architecture, geometry; removing something that reveals structure or that a figure overlaps; any reframe revealing content outside the frame | **Regenerate, then path 3** | Those pixels do not exist — but a regeneration repaints the whole frame, so take only the region you asked for. |
 | Wrong, misspelled or badly drawn **text/lettering** | **Regenerate**, then path 3 | ImageMagick cannot author glyphs in style. Fix spelling and typeface in the prompt. |
@@ -174,9 +174,10 @@ cannot help when the whole frame has to move.
 - **Intermediates go to the scratchpad**, with one exception: a mask that a receipt
   cites (a composite's, or a paid call's `--mask`) is kept beside that scene in the
   output folder — `OUT/<scene>/masks/` — so the receipt stays reproducible.
-- **A composite you intend to keep needs its own `vNNN`** — the image as `image.png`
-  and a hand-written `generation.md`, because `promote.py` and `--refinish` read no
-  other filenames. **That receipt must open by saying no model was called**
+- **A composite you intend to keep needs its own `vNNN`**, numbered past every existing
+  folder and every number in `DELETED.md`, with the image as `image.png` and a
+  hand-written `generation.md`, because `promote.py` and `--refinish` read no other
+  filenames. **That receipt must open by saying no model was called**
   (`Source: local composite, no generation`), then name the baseline `vNNN`, the donor
   `vNNN` and the commands. Without it, a composite attached to a later generation
   passes the provenance check silently and enters the record as model history.

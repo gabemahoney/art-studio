@@ -10,7 +10,7 @@ a place, a ship, an object — persists on disk as a written design plus one app
 picture. Scenes are built only from those approved pictures, so the cast stays
 recognizable and the rendering never drifts.
 
-Never call an image tool directly and never hand-write a prompt, because the four
+Never call an image tool directly and never hand-write a prompt, because the
 scripts in this skill's `scripts/` folder enforce what a hand-made call gets wrong.
 Below, `S` is that folder's absolute path, and `T` is a scratch directory you make once
 per session with `mktemp -d`, so intermediates never land in the package or the output
@@ -36,12 +36,13 @@ PKG/
   style_versions/          frozen style-vN.md + canonical_style_reference-vN.png
   assets/<type>/<slug>/    one folder per recurring subject
 OUT/
-  <scene>/vNNN/            image.png + generation.md, one per attempt
+  <scene>/vNNN/            image.png + generation.md (+ any delivered-WxH.png), one per attempt
   <scene>/final.png        the approved scene, + final.md
 ```
 
 `<type>` is any category you invent — `personas`, `locations`, `items`, `ships`.
-`assets/<type>/` is created on demand. `rules.md` (beside this file) is the generation
+You create `assets/<type>/<slug>/` for a new asset; `gen.py` refuses an asset folder
+that does not exist. `rules.md` (beside this file) is the generation
 contract and is the same for every package.
 
 ### What each file is for
@@ -58,7 +59,7 @@ contract and is the same for every package.
 | `prompt.md` | a note to your future self: which inputs and roles regenerate this asset's sheet | you |
 | `candidates/vNNN/image.png` | raw model output, exactly as returned. Frozen forever | `gen.py` |
 | `candidates/vNNN/generation.md` | **the receipt** — the full prompt, every input resolved to a frozen path, model, date. A replay must be reconstructable from this file alone | `gen.py` |
-| `candidates/DELETED.md` | the deletion log: one `vNNN` per candidate removed at the user's insistence (see Rules) | you |
+| `candidates/DELETED.md` | the deletion log: one `vNNN` per candidate removed at the user's insistence (see *Rules that are never optional*) | you |
 | `reference.png` | **the approved picture.** The only image a scene may build from | `promote.py` |
 | `reference.md` | the sidecar naming which candidate it came from, plus the user's approval verbatim. **Without it the asset counts as unapproved and `gen.py` refuses to attach it** | `promote.py` |
 | `sources/` | user-supplied originals, crops and composite inputs | you |
@@ -157,14 +158,16 @@ python3 $S/gen.py --package PKG --output OUT --scene <scene> \
   order of the `--attach` flags must match the order of the `--role` flags, because
   position is the only binding the image model honors — "image 1" is a promise about
   order, not about a filename.
-- `--dry-run` validates every invariant for free: the One Rule, reference provenance,
-  the attachment cap, a dead model, the slug. Run it whenever anything is unusual.
+- `--dry-run` validates the invariants for free: the One Rule checks, reference
+  provenance, the attachment cap, a dead model, the slug. It skips the `--approved-by`
+  check a real `--backend api` call makes. Run it whenever anything is unusual.
 - `vNNN` is allocated by `gen.py` after a successful response, so a failure leaves no
-  empty folder. Never create a candidate folder and never pick a number yourself.
+  empty folder. Never create a candidate folder or pick a number yourself, except for a
+  kept local composite (`reference/fixing-an-image.md` → *Guardrails*).
 - `--preset <name>` picks a delivery spec from the package's `presets.json`.
 
-`gen.py` fails closed *before* anything is billed on any One Rule violation or a
-failed provenance check. A refusal has cost nothing — read it and fix the call.
+`gen.py` fails closed *before* anything is billed on the One Rule checks it can make
+(`rules.md` → *Tooling*) or a failed provenance check. A refusal has cost nothing — read it and fix the call.
 
 ### 4. Look at the image, then record what you see
 
@@ -173,7 +176,8 @@ python3 $S/review.py OUT/<scene>/vNNN --review "<what you see, misses included>"
 ```
 
 For an asset, pass its `candidates/vNNN` directory here and in step 6. Actually open it, and inspect contested details at 300–500% before calling anything
-fixed (see *Two habits worth building* below).
+fixed (see *Two habits worth building* below; `reference/imagemagick.md` → *Inspection*
+has the commands).
 
 ### 5. Show the user and give an honest read
 
@@ -208,7 +212,7 @@ What changes between them is only step 1's text and step 3's attachments.
 |---|---|---|
 | **New asset** | `description.md` v1 | anchor as STYLE, plus the *minimum* identity input: a `sources/` original, a crop, or nothing |
 | **Revise an asset** | `description.md` bumped + snapshotted | anchor as STYLE, plus the baseline as EDIT TARGET |
-| **Scene** | a scene spec file | anchor as STYLE, plus each cast member's `reference.png` as IDENTITY |
+| **Scene** | a scene spec file | anchor as STYLE, plus **at most one** cast `reference.png` or group lineup as IDENTITY, with the rest of the cast in text (`reference/writing-prompts.md`) |
 
 **New asset, default sheet layout** (unless the user specifies one): people get
 front, three-quarter, profile and back full-body views at one consistent scale, plus
@@ -266,7 +270,7 @@ all.
 
 - **Writing the `--task` line or spec file** → `reference/writing-prompts.md`: countable
   positive statements instead of bans, aspect ratio in the body, scale drift, and the
-  attachment budget for scenes.
+  one-identity-sheet limit for scenes.
 - **The image came out wrong, before any revision** → `reference/when-it-looks-wrong.md`:
   picking the baseline from the user's words, the stale-baseline guard, diagnosing a
   style failure, and the ladder for right design with wrong rendering.
