@@ -130,7 +130,7 @@ def cmd_plan(args) -> int:
                 stack, warnings = step_combined(scene, records, cur, record)
             except Fail as e:
                 raise Fail(f"plan not recorded: this change builds its Combined Image in the "
-                           f"same run (SR-2.6), and that can't be built: {e} Restore the file, "
+                           f"same run, and that can't be built: {e} Restore the file, "
                            "or change the plan so it doesn't hold that version.") from None
 
     print(f"  scene {args.scene}: proposed Layer Plan")
@@ -175,7 +175,7 @@ def cmd_plan(args) -> int:
 
 def step_combined(scene: Path, records: list[dict], cur: dict,
                   record: dict) -> tuple[list[dict], list[str]]:
-    """SR-2.6: the Combined Image a plan change builds in the same run, as the step's
+    """The Combined Image a plan change builds in the same run, as the step's
     Combined Image of a step that made no Layer Version: when it removes or reorders
     Layers, or every Layer it adds, puts back or changes already has a counting
     version, and some Layer then has one. Its stack and warnings, checked; empty when
@@ -198,8 +198,8 @@ def step_combined(scene: Path, records: list[dict], cur: dict,
 
 
 def cmd_keep(args) -> int:
-    """SR-8.3: record that the User keeps a Layer Version, making it the Layer's
-    Default Version (SR-8.5) without approving it."""
+    """Record that the User keeps a Layer Version, making it the Layer's
+    Default Version without approving it."""
     if not args.dry_run and args.based_on is None:
         raise Fail("--based-on is required: the journal number the dry run printed, "
                    "so a decision is never recorded against a state the User wasn't shown")
@@ -243,7 +243,7 @@ def cmd_keep(args) -> int:
 
 
 def cmd_check_delete(args) -> int:
-    """SR-11.1: whether a Layer Version, Draft or Combined Image folder may be deleted.
+    """Whether a Layer Version, Draft or Combined Image folder may be deleted.
     A Layer's Approved Layer Version, a version any Combined Image's receipt names, and
     the scene's approved Combined Image never may, even if the User insists."""
     scene = scene_dir(args)
@@ -328,7 +328,7 @@ def journal_ref(rec: dict) -> str:
 
 
 def layered_status(scene: Path, records: list[dict], plan: dict) -> list[str]:
-    """SR-12.1: each Layer's versions, whether each counts and why not, its approval,
+    """Each Layer's versions, whether each counts and why not, its approval,
     keep and Default Version; removed Layers; the Drafts; the Combined Images, which
     can be approved, and the approved one; and every integrity problem."""
     lines, problems = ["  Layers, bottom to top:"], []
@@ -437,7 +437,7 @@ def layered_status(scene: Path, records: list[dict], plan: dict) -> list[str]:
 
 
 def stack_problem(scene: Path, s: dict) -> str | None:
-    """Why a Combined Image's stack line can't be rebuilt from (SR-1.8), or None."""
+    """Why a Combined Image's stack line can't be rebuilt from, or None."""
     vdir = (gen.OUT / s["path"].removeprefix("output:")).resolve()
     what = scene_state.classify(scene, vdir / "image.png")
     if not s["path"].startswith("output:") or not what or what["kind"] != "layer":
@@ -470,7 +470,7 @@ def layered_plan(scene: Path, command: str) -> tuple[list[dict], dict]:
 
 
 def stack_command(frame: dict, images: list[Path], dest: Path) -> list[str]:
-    """SR-7.5: a fully transparent canvas of the Frame's pixel size, with each Layer
+    """A fully transparent canvas of the Frame's pixel size, with each Layer
     Version composited over it from the bottom with Over and nothing else. The PNG
     leaves out its date chunks, so the same stack writes the same bytes. Each input is
     read as PNG only (png:), so a file posing as one can't make ImageMagick read
@@ -507,7 +507,7 @@ def signature(image: Path) -> str:
 
 
 def opaque_everywhere(image: Path) -> bool:
-    """SR-7.7: no pixel's alpha is below 0.98, so a haze Layer that is partly
+    """No pixel's alpha is below 0.98, so a haze Layer that is partly
     transparent everywhere doesn't count."""
     return not gen.has_alpha(image) or gen.fx(image, "minima", "-alpha", "extract") >= 0.98
 
@@ -554,8 +554,8 @@ def choose_stack(scene: Path, records: list[dict], plan: dict, use: dict[str, in
 
 
 def check_stack(records: list[dict], plan: dict, stack: list[dict]) -> list[str]:
-    """SR-1.8 and SR-7.4 refusals for a stack, before anything is written; returns the
-    SR-7.7 warnings."""
+    """Integrity and stack-shape refusals for a stack, before anything is written;
+    returns the not-opaque-everywhere warnings."""
     frame = plan["frame"]
     for v in stack:
         image = v["dir"] / "image.png"
@@ -595,7 +595,7 @@ def style_of(folder: Path) -> str:
 
 
 def show_stack(stack: list[dict], named: set[str]) -> list[str]:
-    """SR-7.8: each Layer's version and whether it is its Approved Layer Version."""
+    """Each Layer's version and whether it is its Approved Layer Version."""
     return [f"    {i:2} {v['layer']} {v['name']}  ("
             + ("removed; placed with --insert" if v["removed"] else
                "named with --use" if v["layer"] in named else "its Default Version")
@@ -607,8 +607,8 @@ def show_stack(stack: list[dict], named: set[str]) -> list[str]:
 
 def write_combined(scene: Path, plan: dict, stack: list[dict], warnings: list[str],
                    request: str | None, mode: str | None) -> Path:
-    """Build the stack into the scene's next vNNN/ and write its receipt (SR-7.5,
-    SR-7.6). Every check has run already."""
+    """Build the stack into the scene's next vNNN/ and write its receipt.
+    Every check has run already."""
     frame = plan["frame"]
     gen.require_binary("magick", "install ImageMagick (brew install imagemagick)")
     gen.writable_base(scene)
@@ -750,7 +750,7 @@ def cmd_combine(args) -> int:
 
 
 def cmd_record(args) -> int:
-    """SR-6.1, SR-6.2: record a Layer Version made with ImageMagick (path 1, a
+    """Record a Layer Version made with ImageMagick (path 1, a
     transplant, moving or scaling content, or path 3's composite) into the Layer's
     next vNNN/, with a receipt naming its starting version, donors, commands and mask.
     No image model is called."""
@@ -880,7 +880,7 @@ def size_of(path: Path, flag: str) -> tuple[int, int]:
 
 
 def sound(records: list[dict], v: dict, role: str) -> None:
-    """SR-1.8: refuse a Layer Version that is deleted, missing or altered."""
+    """Refuse a Layer Version that is deleted, missing or altered."""
     for trouble in (scene_state.problem(v["dir"], gen.deleted_numbers),
                     scene_state.journal_problem(records, v["layer"], v["dir"])):
         if trouble:

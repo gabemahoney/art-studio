@@ -150,7 +150,7 @@ def well_formed_plan(rec: dict) -> bool:
 
 
 def well_formed_decision(rec: dict) -> bool:
-    """A keep, Layer approval or scene approval record holds what SR-1.4 says it names."""
+    """A keep, Layer approval or scene approval record holds the Layers and versions it names."""
     named = lambda d: (isinstance(d, dict) and isinstance(d.get("layer"), str)
                        and isinstance(d.get("version"), str)
                        and VNNN.fullmatch(d["version"]) is not None
@@ -191,7 +191,7 @@ def generated(scene_dir: Path, deleted_numbers) -> bool:
 # ------------------------------------------------------------------ versions
 
 VNNN = re.compile(r"v(\d+)")
-RATIO_TOLERANCE = 0.01   # gen.py's one number for "two aspect ratios differ" (SR-3.5)
+RATIO_TOLERANCE = 0.01   # gen.py's one number for "two aspect ratios differ"
 
 
 def md5(path: Path) -> str:
@@ -220,7 +220,7 @@ def folders(base: Path, deleted_numbers) -> list[dict]:
 
 def problem(folder: Path, deleted_numbers) -> str | None:
     """Why the image a record folder holds can't be combined, attached or rebuilt from
-    (SR-1.8): deleted, missing, or not the md5 its receipt records. None when sound."""
+    deleted, missing, or not the md5 its receipt records. None when sound."""
     folder = Path(folder)
     if int(folder.name[1:]) in deleted_numbers(folder.parent):
         return "deleted (its deletion log records it)"
@@ -244,7 +244,7 @@ def sized(folder: Path, size_of) -> tuple[int, int] | None:
 
 def layer_versions(scene_dir: Path, layer_id: str, plan: dict, deleted_numbers,
                    size_of) -> list[dict]:
-    """Each recorded version of a Layer, with whether it counts (SR-8.1) and why not.
+    """Each recorded version of a Layer, with whether it counts and why not.
 
     size_of is gen.identify, passed in; assess() decides what counts."""
     found = []
@@ -256,7 +256,7 @@ def layer_versions(scene_dir: Path, layer_id: str, plan: dict, deleted_numbers,
 
 
 def assess(versions: list[dict], layer_id: str, plan: dict) -> list[dict]:
-    """SR-8.1, apart from file access: copies of one Layer's versions (each with
+    """Which versions count, apart from file access: copies of one Layer's versions (each with
     "entry", "size" and "deleted"), each with "counts" and "why_not" added.
 
     A version counts when its Layer is in the current plan, its image.png is the
@@ -309,9 +309,9 @@ def named_versions(rec: dict) -> dict[str, str]:
 
 
 def journal_view(records: list[dict]) -> dict:
-    """What SR-8 reads from the journal, in one pass: the current plan, the latest
-    scene approval, and per Layer its latest approval record (SR-8.2) and the keep
-    still in force by the journal (SR-8.4: no later keep or approval of that Layer,
+    """What the Layer state reads from the journal, in one pass: the current plan, the latest
+    scene approval, and per Layer its latest approval record and the keep
+    still in force by the journal (no later keep or approval of that Layer,
     and every later plan holds it with a Layer Entry that says the same as when it was
     kept). Whether the kept version is deleted is checked against the versions."""
     view = {"records": records, "latest": latest(records), "plan": None,
@@ -342,12 +342,12 @@ def layer_state(view: dict, layer_id: str, versions: list[dict]) -> dict:
     """One Layer's versions in use, from the journal view and its assessed versions:
     "approval" (the record) and "approved" (its version, counting or not, None when
     that folder is gone), "keep" and "kept" (the keep in force), "latest", and
-    "default" with "default_why" (SR-8.5: kept, approved or latest; None for none)."""
+    "default" with "default_why" (kept, approved or latest; None for none)."""
     approval, keep = view["approval"].get(layer_id), view["keep"].get(layer_id)
     approved = approval and find(versions, named_versions(approval)[layer_id])
     kept = keep and find(versions, keep["version"])
     if kept is not None and kept["deleted"]:
-        keep = kept = None   # deleting a kept version ends its keep (SR-8.4)
+        keep = kept = None   # deleting a kept version ends its keep
     counting = [v for v in versions if v["counts"]]
     latest_v = counting[-1] if counting else None
     for why, v in (("kept", kept), ("approved", approved), ("latest", latest_v)):
@@ -368,7 +368,7 @@ def layered_view(records: list[dict]) -> dict:
 
 
 def check_keep(view: dict, layer_id: str, versions: list[dict], name: str) -> dict:
-    """SR-8.3: refuse a keep of a version that doesn't count. Returns the version."""
+    """Refuse a keep of a version that doesn't count. Returns the version."""
     ids = [l["id"] for l in view["plan"]["layers"]]
     if layer_id not in ids:
         raise Fail(f"Layer {layer_id!r} is not in the current Layer Plan "
@@ -385,7 +385,7 @@ def check_keep(view: dict, layer_id: str, versions: list[dict], name: str) -> di
 
 def check_layer_approval(view: dict, layer_id: str, versions: list[dict], name: str,
                          replace: bool) -> dict | None:
-    """SR-10.2 and SR-10.3. Returns the approval record this one replaces, if any."""
+    """Refuse a Layer approval the rules forbid. Returns the approval record this one replaces, if any."""
     v = find(versions, name)
     if v is None:
         raise Fail(f"Layer {layer_id} has no version {name} (layers.py status lists them)")
@@ -403,7 +403,7 @@ def check_layer_approval(view: dict, layer_id: str, versions: list[dict], name: 
 
 def check_scene_approval(view: dict, versions: dict[str, list[dict]], stack: list[dict],
                          replace: bool) -> dict:
-    """SR-10.5 and SR-10.6 for a Combined Image whose stack is [{"layer", "version"}],
+    """Refuse a scene approval the rules forbid, for a Combined Image whose stack is [{"layer", "version"}],
     bottom first; versions holds every Layer's assessed versions. Returns what the
     approval replaces: "scene" (the latest scene approval, or None) and "layers"
     ({"layer", "version", "record"} for each Layer it holds whose Approved Layer
@@ -447,7 +447,7 @@ def check_scene_approval(view: dict, versions: dict[str, list[dict]], stack: lis
 
 
 def journal_problem(records: list[dict], layer_id: str, folder: Path) -> str | None:
-    """SR-1.8 for journal records: how a Layer Version's image.png differs from the md5
+    """For journal records: how a Layer Version's image.png differs from the md5
     a keep or approval record naming it records, or None."""
     folder, found = Path(folder), None
     for r in records:
@@ -466,13 +466,13 @@ def journal_problem(records: list[dict], layer_id: str, folder: Path) -> str | N
 
 
 def layer_files(rec: dict) -> list[tuple[str, dict]]:
-    """SR-17.4: final-layers/NN-<layer-id>.png for each Layer a scene approval record
+    """final-layers/NN-<layer-id>.png for each Layer a scene approval record
     names, from 01 at the bottom, with what the record says of it."""
     return [(f"{i:02d}-{l['layer']}.png", l) for i, l in enumerate(rec["layers"], start=1)]
 
 
 def final_md(rec: dict) -> str:
-    """final.md for a scene approval record (SR-10.8): today's provenance, approval,
+    """final.md for a scene approval record: today's provenance, approval,
     date and md5 lines, then the Layer files in stacking order."""
     return "\n".join([
         f"Promoted from {rec['combined'].rsplit('/', 1)[-1]}",
@@ -494,7 +494,7 @@ def final_md(rec: dict) -> str:
 
 def copies_mismatch(scene_dir: Path, rec: dict) -> list[str]:
     """How final.png, final.md and final-layers/ differ from the latest scene approval
-    record (SR-10.9); empty when they match."""
+    record; empty when they match."""
     scene_dir, out = Path(scene_dir), []
     final, md, folder = scene_dir / "final.png", scene_dir / "final.md", scene_dir / "final-layers"
     if not final.is_file() or md5(final) != rec["md5"]:
@@ -566,7 +566,7 @@ def stack_of(receipt: dict) -> list[dict]:
 
 
 def holds(info: dict | None, layer_id: str) -> Path | None:
-    """The version folder of layer_id that a classified image holds (SR-5.4): the
+    """The version folder of layer_id that a classified image holds: the
     image itself when it is a version of that Layer, the version a Combined Image's
     receipt stacks for it, or what an adjusted copy's source holds. None for none."""
     if info is None:
@@ -624,7 +624,7 @@ def entry_from(records: list[dict], number: int, layer_id: str) -> str:
 
 
 def plan_changes(records: list[dict], proposal: dict) -> list[str]:
-    """What the proposal changes about the current plan (SR-2.4: Layer changes)."""
+    """What the proposal changes about the current plan (its Layer changes)."""
     cur = current_plan(records)
     if cur is None:
         return []
@@ -665,7 +665,7 @@ def plan_changes(records: list[dict], proposal: dict) -> list[str]:
 
 
 def plan_effects(records: list[dict], proposal: dict, versions: dict[str, list[dict]]) -> list[str]:
-    """SR-2.4: each Approved Layer Version that the proposal would make stop counting
+    """Each Approved Layer Version that the proposal would make stop counting
     or count again, and each keep it would end. versions holds each Layer's versions
     (with "entry", "size" and "deleted"), for every Layer ever planned or proposed."""
     cur = current_plan(records)
@@ -689,7 +689,7 @@ def plan_effects(records: list[dict], proposal: dict, versions: dict[str, list[d
 
 
 def check_plan(records: list[dict], proposal: dict, has_generated: bool) -> list[str]:
-    """Refuse a proposal SR-2.2/2.3 forbids; otherwise return what it changes."""
+    """Refuse a proposal the plan rules forbid; otherwise return what it changes."""
     if proposal["layered"]:
         layers = proposal["layers"]
         seen = set()
@@ -739,7 +739,7 @@ def publish(scene_dir: Path, record: dict, fallback: bool = False) -> Path:
 
     The record is written to a hidden temp file and hard-linked to its number; the
     link fails when another writer took that number. fallback (a Single-Layer Scene's
-    plan record, SR-1.10) lets a filesystem without hard links create the numbered
+    plan record) lets a filesystem without hard links create the numbered
     file exclusively and then write it instead."""
     jdir = journal_dir(scene_dir)
     dest = jdir / f"{record['number']:03d}.json"
