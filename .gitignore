@@ -27,6 +27,6 @@ __pycache__/
 # Obsidian editor state — personal, never published
 .obsidian/
 
-# SDLC worktrees and bees ticket hives — local workflow state, never published
+# Local worktrees and ticket folders — personal workflow state, never published
 /.worktrees/
 /tickets/
