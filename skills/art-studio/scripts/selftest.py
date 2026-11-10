@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Exercise every guard in gen.py, prompt.py, review.py and promote.py without
-generating anything.
+"""Exercise every guard in gen.py, prompt.py, review.py, promote.py and layers.py
+without generating anything.
 
   python3 -I scripts/selftest.py
 
@@ -21,8 +21,11 @@ import sys
 sys.dont_write_bytecode = True
 
 import base64
+import builtins
 import contextlib
+import errno
 import io
+import json
 import os
 import re
 import shutil
@@ -34,6 +37,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import gen  # noqa: E402
+import layers  # noqa: E402
 
 ANCHOR = "ref_images/style_references/canonical_style_reference.png"
 
@@ -270,7 +274,13 @@ def run_checks(tmp: Path) -> int:
             code, msg = script("gen.py", *args)
         report(name, code != 0 and expect in msg, f"expected {expect!r}, exit {code}:\n{msg}")
 
-    # --- positive controls: correct calls are accepted, and touch nothing
+    # --- positive controls: correct calls are accepted, and touch nothing. A new
+    # scene's first generation needs a Layer Plan, so the second output folder's
+    # scene gets one first.
+    code, msg = script("layers.py", "plan", *P, "--output", str(tmp / "out2"), *scene,
+                       "--single", "--confirmation", "Yes, one image.", "--based-on", "0")
+    report("a single plan is recorded for a scene in a second output folder",
+           code == 0 and (tmp / "out2/scene-a/journal/001.json").exists(), msg)
     before = sorted(p for p in tmp.rglob("*"))
     for name, args in [
         ("a correct scene render is accepted", base + A + I + ["--preset", "page"] + DRY),
@@ -546,6 +556,289 @@ def run_checks(tmp: Path) -> int:
         if str(p.parent) != temp:
             with contextlib.suppress(OSError):
                 p.parent.rmdir()   # an emptied per-run fallback folder; never a full one
+
+    # --- Layer Plans: layers.py plan and status, and gen.py's gate on a new scene
+    def plan(scene_slug: str, *args: str) -> tuple[int, str]:
+        return script("layers.py", "plan", *P, *O, "--scene", scene_slug, *args)
+
+    def journal(scene_slug: str) -> list[str]:
+        jdir = out / scene_slug / "journal"
+        return sorted(p.name for p in jdir.iterdir()) if jdir.is_dir() else []
+
+    def record(scene_slug: str, n: int) -> dict:
+        return json.loads((out / scene_slug / f"journal/{n:03d}.json").read_text())
+
+    F, YES = ["--frame", "1536x1024"], ["--confirmation", "Yes."]
+    TWO = ["--layer", "sky=Sky and far hills", "--layer", "boats=The two boats"]
+    # a layered scene and a single scene that already have generations
+    for slug, kind in (("lay-gen", F + TWO), ("single-gen", ["--single"])):
+        code, msg = plan(slug, *kind, *YES, "--based-on", "0")
+        if code:
+            raise SystemExit(f"  FAIL: could not plan {slug}:\n  {msg}")
+    (out / "lay-gen/layers/sky/v001").mkdir(parents=True)
+    (out / "single-gen/v001").mkdir()
+
+    layer_cases = [
+        ("a layered plan with one Layer refused",
+         ["fresh", *F, "--layer", "sky=Sky", "--dry-run"], "two or more Layers"),
+        ("a malformed Layer ID refused",
+         ["fresh", *F, "--layer", "Sky=Sky", "--layer", "b=Boats", "--dry-run"],
+         "Layer ID 'Sky'"),
+        ("a duplicate Layer ID refused",
+         ["fresh", *F, "--layer", "a=Sky", "--layer", "a=Boats", "--dry-run"], "given twice"),
+        ("an empty Layer Entry refused",
+         ["fresh", *F, "--layer", "a= \n ", "--layer", "b=Boats", "--dry-run"],
+         "empty Layer Entry"),
+        ("a --layer without ID= refused", ["fresh", *F, "--layer", "sky", "--dry-run"],
+         "use ID=TEXT"),
+        ("--single with --layer refused",
+         ["fresh", "--single", "--layer", "a=Sky", "--dry-run"], "takes no --layer"),
+        ("a malformed --frame refused",
+         ["fresh", "--frame", "0x1024", *TWO, "--dry-run"], "give the Frame as WxH"),
+        ("@N naming no plan record refused",
+         ["lay-gen", *F, "--layer", "sky=@7", "--layer", "boats=@1", "--dry-run"],
+         "holds no record 7"),
+        ("@N on a Layer that plan record lacks refused",
+         ["lay-gen", *F, "--layer", "sky=@1", "--layer", "fog=@1", "--dry-run"],
+         "holds no Layer 'fog'"),
+        ("a plan without --confirmation refused",
+         ["fresh", "--single", "--based-on", "0"], "--confirmation is required"),
+        ("a plan without --based-on refused", ["fresh", "--single", *YES],
+         "--based-on is required"),
+        ("a stale --based-on refused",
+         ["lay-gen", *F, *TWO, "--layer", "fog=Fog", *YES, "--based-on", "0"],
+         "show the User its new state"),
+        ("layered to single after generation refused",
+         ["lay-gen", "--single", *YES, "--based-on", "1"], "Offer the User a new scene"),
+        ("single to layered after generation refused",
+         ["single-gen", *F, *TWO, *YES, "--based-on", "1"], "Offer the User a new scene"),
+        ("a scene made before Layer Plans can't become layered",
+         ["scene-a", *F, *TWO, "--dry-run"], "Offer the User a new scene"),
+        ("a Frame change after generation refused",
+         ["lay-gen", "--frame", "1024x1024", *TWO, *YES, "--based-on", "1"],
+         "Frame is locked"),
+        ("removal from a two-Layer plan after generation refused",
+         ["lay-gen", *F, "--layer", "sky=@1", *YES, "--based-on", "1"],
+         "add the replacement Layer first"),
+        ("layers.py refuses --output inside the package", None, "overlaps the package"),
+        ("layers.py refuses a bad scene slug", ["Bad Scene", "--single", "--dry-run"],
+         "scene slug"),
+    ]
+    for name, args, expect in layer_cases:
+        before = sorted(tmp.rglob("*"))
+        if args is None:
+            code, msg = script("layers.py", "plan", *P, "--output", str(pkg / "renders"),
+                               "--scene", "x", "--single", *YES, "--based-on", "0")
+        else:
+            code, msg = plan(*args)
+        report(name, code != 0 and expect in msg and "Traceback" not in msg
+               and sorted(tmp.rglob("*")) == before,
+               f"expected {expect!r} and nothing written, exit {code}:\n{msg}")
+
+    for name, slug, expect in [
+        ("a new scene's first generation needs a Layer Plan", "fresh", "has no Layer Plan"),
+        ("a layered scene refuses a one-image generation", "lay-gen", "is layered"),
+    ]:
+        code, msg = script("gen.py", *P, *O, "--scene", slug, "--prompt-file", str(prompt),
+                           *A, *I, *DRY)
+        report(name, code != 0 and expect in msg, f"expected {expect!r}, exit {code}:\n{msg}")
+    code, msg = script("gen.py", *P, *O, "--scene", "single-gen", "--prompt-file",
+                       str(prompt), *A, *I, *DRY)
+    report("a planned Single-Layer Scene generates as before",
+           code == 0 and "invariants OK" in msg, msg)
+
+    (out / "deleted-only").mkdir()
+    (out / "deleted-only/DELETED.md").write_text("- v001: deleted at the user's insistence\n")
+    code, msg = script("gen.py", *P, *O, "--scene", "deleted-only", "--prompt-file",
+                       str(prompt), *A, *I, *DRY)
+    report("a scene whose only history is its deletion log generates as before",
+           code == 0 and "invariants OK" in msg, msg)
+
+    good = '{"number": 1, "kind": "plan", "date": "2026-01-01", "words": "Yes.", '
+    for name, files, expect in [
+        ("a journal record whose number doesn't match its name refused",
+         {"001.json": '{"number": 2, "kind": "plan"}'}, "is not a journal record"),
+        ("an unparseable journal record refused", {"001.json": '{"number": 1, '},
+         "is not a readable journal record"),
+        ("a journal holding one number twice refused",
+         {"001.json": good + '"layered": false}', "0001.json": good + '"layered": false}'},
+         "holds record 1 twice"),
+        ("a plan record missing its fields refused",
+         {"001.json": good + '"layered": true, "frame": {"width": 9}}'},
+         "is not a whole plan record"),
+    ]:
+        jbad = out / f"bad-journal-{checks}/journal"
+        jbad.mkdir(parents=True)
+        for fname, text in files.items():
+            (jbad / fname).write_text(text)
+        code, msg = script("layers.py", "status", *P, *O, "--scene", jbad.parent.name)
+        code2, msg2 = script("gen.py", *P, *O, "--scene", jbad.parent.name,
+                             "--prompt-file", str(prompt), *A, *I, *DRY)
+        report(name, code != 0 and expect in msg and code2 != 0 and expect in msg2,
+               f"status exit {code}: {msg}\ngen.py exit {code2}: {msg2}")
+
+    # positive controls after generation: adding a Layer, removing one with its
+    # replacement in the same change, and putting a removed Layer back
+    steps = [
+        ("adding a Layer after generation is recorded",
+         ["--layer", "sky=@1", "--layer", "boats=@1", "--layer", "fog=Fog"], "1",
+         ["adds Layer fog"]),
+        ("removing a Layer with its replacement in the same change is recorded",
+         ["--layer", "sky=@1", "--layer", "fog=@2", "--layer", "ships=Ships"], "2",
+         ["adds Layer ships", "removes Layer boats"]),
+        ("a removed Layer put back with a new Layer Entry says so",
+         ["--layer", "sky=@1", "--layer", "boats=Other boats", "--layer", "fog=@2",
+          "--layer", "ships=@3", "--dry-run"], "3",
+         ["puts back Layer boats, with a Layer Entry that differs from plan record 2's"]),
+        ("a removed Layer put back with its Layer Entry says so",
+         ["--layer", "sky=@1", "--layer", "fog=@2", "--layer", "ships=@3",
+          "--layer", "boats=@2"], "3",
+         ["puts back Layer boats, with its Layer Entry from plan record 2"]),
+    ]
+    for name, layer_args, based, expect in steps:
+        dry = "--dry-run" in layer_args
+        code, msg = plan("lay-gen", *F, *layer_args, *YES, "--based-on", based)
+        n = int(based) + 1
+        ok = code == 0 and all(e in msg for e in expect)
+        if ok and not dry:
+            ok = record("lay-gen", n).get("changes") == expect
+        report(name, ok and len(journal("lay-gen")) == (n - 1 if dry else n), msg)
+
+    # positive controls: dry runs print the proposal and the number to pass, and write
+    # nothing; then a single plan, a change before generation, and an @N copy
+    before = sorted(tmp.rglob("*"))
+    code1, msg1 = plan("fresh", "--single", "--dry-run")
+    code2, msg2 = plan("fresh", *F, *TWO, "--layer", "fog=Morning fog", "--dry-run")
+    report("plan --dry-run prints single and layered proposals and writes nothing",
+           code1 == code2 == 0 and "single" in msg1 and "--based-on 0" in msg1
+           and all(s in msg2 for s in ("1536x1024", "sky: Sky and far hills",
+                                       "3 fog: Morning fog", "--based-on 0"))
+           and sorted(tmp.rglob("*")) == before, msg1 + msg2)
+
+    words = "Yes,  one image.\nGo ahead."
+    code, msg = plan("planned", "--single", "--confirmation", words, "--based-on", "0")
+    rec = record("planned", 1) if code == 0 else {}
+    report("a single plan writes journal/001.json with the words verbatim",
+           code == 0 and journal("planned") == ["001.json"] and rec.get("words") == words
+           and rec.get("kind") == "plan" and rec.get("layered") is False
+           and rec.get("number") == 1 and "previous" not in rec, f"{msg}\n{rec}")
+    umask = os.umask(0)
+    os.umask(umask)
+    mode = (out / "planned/journal/001.json").stat().st_mode & 0o777
+    report("a journal record takes the umask's mode, not mkstemp's 0600",
+           mode == 0o666 & ~umask, f"mode {mode:o}, umask {umask:o}")
+
+    sky = "Sky,   far hills\nand the sun"
+    code, msg = plan("planned", *F, "--layer", f"sky={sky}", "--layer", "boats=Boats",
+                     *YES, "--based-on", "1")
+    rec = record("planned", 2) if code == 0 else {}
+    report("a change before generation switches single to layered",
+           code == 0 and rec.get("previous") == 1 and rec.get("frame") ==
+           {"width": 1536, "height": 1024} and [l["id"] for l in rec.get("layers", [])]
+           == ["sky", "boats"] and rec.get("changes") == ["switches from single to layered"],
+           f"{msg}\n{rec}")
+
+    code, msg = plan("planned", "--frame", "1024x1024", "--layer", "boats=Boats",
+                     "--layer", "sky=@2", "--layer", "fog=Fog", *YES, "--based-on", "2")
+    rec = record("planned", 3) if code == 0 else {}
+    changes = rec.get("changes", [])
+    report("@N copies a Layer Entry verbatim, and the change says what it does",
+           code == 0 and rec.get("layers", [{}, {}])[1].get("entry") == sky
+           and "changes the Frame from 1536x1024 to 1024x1024" in changes
+           and "adds Layer fog" in changes
+           and "reorders Layers, bottom to top: boats, sky" in changes, f"{msg}\n{rec}")
+
+    code, msg = plan("planned", "--frame", "1024x1024", "--layer", "boats=Boats",
+                     "--layer", "sky=Clouds only", *YES, "--based-on", "3", "--dry-run")
+    report("a dry run names a removed Layer and a changed Layer Entry",
+           code == 0 and "removes Layer fog" in msg and "changes Layer sky's Layer Entry"
+           in msg and journal("planned") == ["001.json", "002.json", "003.json"], msg)
+
+    code, msg = script("layers.py", "status", *P, *O, "--scene", "planned")
+    report("status prints the current plan bottom to top",
+           code == 0 and "layered, Frame 1024x1024, 3 Layers" in msg
+           and msg.index("boats:") < msg.index("sky:") < msg.index("fog:")
+           and "journal/003.json" in msg and "--based-on 3" in msg, msg)
+    code, msg = script("layers.py", "status", *P, *O, "--scene", "scene-a")
+    report("status reports a scene made before Layer Plans as single",
+           code == 0 and "single (no Layer Plan recorded)" in msg
+           and "as before Layer Plans" in msg, msg)
+
+    # the journal writer: a number taken at publish, and a filesystem without hard
+    # links, injected in-process; nothing partial is ever left behind
+    def layers_main(*argv: str) -> str:
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                return f"exit {layers.main(['plan', *P, *O, *argv])}"
+        except (Exception, SystemExit) as e:
+            return f"{type(e).__name__}: {e}"
+        finally:
+            gen.PKG = gen.OUT = None
+
+    real_link = os.link
+
+    def rival_link(src, dst, *a, **kw):
+        Path(dst).write_text('{"number": 1, "kind": "plan", "rival": true}')
+        return real_link(src, dst, *a, **kw)
+
+    def no_links(*_a, **_kw):
+        raise OSError(errno.ENOTSUP, "Operation not supported")
+
+    def disk_full(*_a, **_kw):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    real_open = builtins.open
+
+    def open_then_fill(path, mode="r", *a, **kw):   # creates the file, then the disk fills
+        f = real_open(path, mode, *a, **kw)
+        f.write = disk_full
+        return f
+
+    for name, patches, args, expect, files in [
+        ("a number taken at publish refuses and writes nothing", [(os, "link", rival_link)],
+         ["race", *F, *TWO], "published by another writer", ["001.json"]),
+        ("no hard links: a layered plan stops, naming the journal folder",
+         [(os, "link", no_links)],
+         ["nolink-l", *F, *TWO], f"{(out / 'nolink-l/journal').resolve()}", []),
+        ("no hard links: a single plan falls back to exclusive create",
+         [(os, "link", no_links)], ["nolink-s", "--single"], "exit 0", ["001.json"]),
+        ("a full disk while writing the record refuses and leaves no file",
+         [(os, "fchmod", disk_full)], ["full-l", *F, *TWO],
+         "could not write in the Scene Journal", []),
+        ("a full disk during the no-hard-link fallback leaves no partial record",
+         [(os, "link", no_links), (builtins, "open", open_then_fill)],
+         ["full-s", "--single"], "could not write in the Scene Journal", []),
+    ]:
+        saved = [(obj, attr, getattr(obj, attr)) for obj, attr, _ in patches]
+        for obj, attr, value in patches:
+            setattr(obj, attr, value)
+        try:
+            result = layers_main("--scene", args[0], *args[1:], *YES, "--based-on", "0")
+        finally:
+            for obj, attr, value in saved:
+                setattr(obj, attr, value)
+        got = journal(args[0])
+        ok = expect in result and got == files
+        if ok and args[0] == "race":
+            ok = record("race", 1).get("rival") is True
+        if ok and args[0] == "nolink-s":
+            ok = record("nolink-s", 1).get("words") == "Yes."
+        report(name, ok, f"{result}; journal holds {got}, expected {files}")
+
+    # done: a new Single-Layer Scene plans, then generates (backend stubbed), reviews
+    # and promotes exactly as before, leaving today's files plus its journal
+    code, msg = plan("single-new", "--single", *YES, "--based-on", "0")
+    result, err = stubbed_main(O + ["--scene", "single-new"], lambda *_a, **_kw: response)
+    rv = script("review.py", str(out / "single-new/v001"), "--review", "Fine.")
+    pr = script("promote.py", str(out / "single-new/v001"), "--approval", "Yes.")
+    got = sorted(str(p.relative_to(out / "single-new")) for p in
+                 (out / "single-new").rglob("*"))
+    report("a planned Single-Layer Scene runs today's loop and keeps its journal",
+           code == 0 and result == "exit 0" and rv[0] == pr[0] == 0
+           and got == ["final.md", "final.png", "journal", "journal/001.json", "v001",
+                       "v001/generation.md", "v001/image.png"],
+           f"plan {msg}; gen {result} {err}; review {rv}; promote {pr}; files {got}")
 
     print(f"\n  {checks - failures}/{checks} checks passed")
     return 1 if failures else 0

@@ -49,6 +49,11 @@ import uuid
 from datetime import date
 from pathlib import Path, PurePosixPath
 
+# python3 -I leaves this script's folder off sys.path; scene_state lives beside it.
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import scene_state  # noqa: E402
+
 ANCHOR = Path("ref_images/style_references/canonical_style_reference.png")
 
 # The two locations every command works against. Both are given on the command line --
@@ -453,7 +458,7 @@ def check_target(asset: str | None, scene: str | None) -> Path:
         return writable_base(PKG / "assets" / asset / "candidates")
     if OUT is None:
         raise Fail("--scene needs --output: the folder this render is delivered to")
-    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", scene):
+    if not re.fullmatch(scene_state.SLUG, scene):
         raise Fail(f"scene slug {scene!r}: use lowercase letters, digits, . _ -")
     return writable_base(OUT / scene)
 
@@ -475,6 +480,25 @@ def writable_base(base: Path) -> Path:
                            "folders. Fix its permissions (e.g. chmod u+wx) and rerun.")
             break
     return base
+
+
+def check_layer_plan(scene_dir: Path) -> None:
+    """A scene's first generation needs a Layer Plan the User confirmed, recorded with
+    layers.py plan. A scene with attempts and no plan (made before Layer Plans) and a
+    Single-Layer Scene generate as before; a Layered Scene is made one Layer at a time."""
+    try:
+        records = scene_state.read_journal(scene_dir)
+    except scene_state.Fail as e:
+        raise Fail(str(e)) from None
+    plan = scene_state.current_plan(records)
+    if plan is None and not scene_state.generated(scene_dir, deleted_numbers):
+        raise Fail(f"scene {scene_dir.name} has no Layer Plan and nothing generated yet. "
+                   "Propose a Layer Plan (single or layered) to the User and record their "
+                   "confirmation with layers.py plan before generating.")
+    if plan is not None and plan["layered"]:
+        raise Fail(f"scene {scene_dir.name} is layered (journal/{plan['number']:03d}.json), "
+                   "so it is made one Layer or Draft at a time, never as one image; "
+                   "this gen.py does not generate Layers or Drafts yet.")
 
 
 def deleted_numbers(base: Path) -> set[int]:
@@ -965,6 +989,8 @@ def main() -> int:
     # Everything that can fail must fail here, before anything is billed.
     base = check_target(args.asset, args.scene)
     deleted = deleted_numbers(base)
+    if args.scene:
+        check_layer_plan(base)
     require_binary("magick", "install ImageMagick (brew install imagemagick)")
     if args.backend == "codex":
         require_binary("codex", "install the Codex CLI, or use --backend api")
