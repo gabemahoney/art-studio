@@ -522,6 +522,17 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
                and text.count("Delivered:") == 1 and text.index("Delivered:")
                < text.index("## Exact prompt"), f"{runs}\nreceipt:\n{text}")
 
+    vdir = out / "refinish-dry/v001"
+    vdir.mkdir(parents=True)
+    magick("-size", "1536x1024", "xc:#336699", str(vdir / "image.png"))
+    receipt = "# refinish v001\n\nStatus: approved\nOutput: image.png, 1536x1024\n"
+    (vdir / "generation.md").write_text(receipt)
+    code, msg = script("gen.py", *P, "--refinish", str(vdir), "--final-size", "800x600", *DRY)
+    report("--refinish --dry-run says what it would write and writes nothing",
+           code == 0 and "would write" in msg and "delivered-800x600.png" in msg
+           and sorted(c.name for c in vdir.iterdir()) == ["generation.md", "image.png"]
+           and (vdir / "generation.md").read_text() == receipt, f"exit {code}:\n{msg}")
+
     vdir = out / "refinish-none/v001"
     vdir.mkdir(parents=True)
     magick("-size", "1536x1024", "xc:#336699", str(vdir / "image.png"))

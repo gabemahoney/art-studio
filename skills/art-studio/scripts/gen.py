@@ -1007,12 +1007,14 @@ def has_alpha(path: Path) -> bool:
     return out.strip().lower() in ("true", "blend", "on", "activate")
 
 
-def finish(raw: Path, final_size: str, flatten: str, max_mb: float) -> tuple[Path, str]:
+def finish(raw: Path, final_size: str, flatten: str, max_mb: float,
+           dry_run: bool = False) -> tuple[Path, str]:
     """Deliverable derived from the raw output: exact px, flattened, sRGB, no alpha.
 
     Scales to FIT inside the target and pads onto the flatten color, so a raw
     output whose aspect differs from the target is never stretched or cropped —
-    no hull is ever cut off to satisfy the box.
+    no hull is ever cut off to satisfy the box. With dry_run, writes nothing and
+    returns the path and note it would have; the note then has no size in MB.
     """
     import subprocess
 
@@ -1036,10 +1038,13 @@ def finish(raw: Path, final_size: str, flatten: str, max_mb: float) -> tuple[Pat
            "-gravity", "center", "-extent", f"{w}x{h}",
            "-alpha", "remove", "-alpha", "off", "-depth", "8",
            "-define", "png:color-type=2", "-strip", str(dest)]
-    subprocess.run(cmd, check=True, capture_output=True)
-    mb = dest.stat().st_size / 1_000_000
+    if not dry_run:
+        subprocess.run(cmd, check=True, capture_output=True)
+    mb = 0.0 if dry_run else dest.stat().st_size / 1_000_000
     note = (f"{dest.name}, {final_size}, sRGB 8-bit PNG-24 no alpha, "
-            f"flattened onto {flatten}, {mb:.2f} MB; scaled to fit from raw {rw}x{rh}")
+            f"flattened onto {flatten}"
+            + ("" if dry_run else f", {mb:.2f} MB")
+            + f"; scaled to fit from raw {rw}x{rh}")
     if abs((rw / rh) - (w / h)) > 0.01:
         note += (f"  [raw aspect {rw}:{rh} != target {w}:{h} — padded, not cropped; "
                  "regenerate at the target aspect for a full-bleed image]")
@@ -1274,7 +1279,8 @@ def main() -> int:
                    help=f"warn if the deliverable exceeds this size "
                         f"(default {DEFAULT_MAX_MB})")
     p.add_argument("--dry-run", action="store_true",
-                   help="validate invariants and exit without calling the API")
+                   help="validate invariants and exit without calling the API "
+                        "(with --refinish: without writing anything)")
     args = p.parse_args()
     check_no_stale_bytecode()
     set_locations(args.package, args.output)
@@ -1329,7 +1335,13 @@ def main() -> int:
             raise Fail(f"{args.refinish} is a Layered Scene's Layer Version or Draft; only "
                        "a Combined Image gets deliverables (layers.py combine).")
         require_binary("magick", "install ImageMagick (brew install imagemagick)")
-        dest, note = finish(raw, args.final_size, args.flatten, args.max_mb)
+        dest, note = finish(raw, args.final_size, args.flatten, args.max_mb, args.dry_run)
+        if args.dry_run:
+            verb = "would write" if dest != raw else "deliverable would be"
+            print(f"  {verb} {dest}\n  {note}")
+            print(f"  would update {receipt} Delivered line to: {note}")
+            print("  dry run: invariants OK, nothing written")
+            return 0
         verb = "wrote" if dest != raw else "deliverable ="
         print(f"  {verb} {dest}\n  {note}")
         record_delivered(receipt, note)
