@@ -29,6 +29,9 @@ phrasing selects it:
 Record the designation in `--mode` so the receipt says what this attempt was edited
 from.
 
+On a Layer, its Default Version takes `reference.png`'s place, and a designation is a
+keep (`reference/layered-scenes.md` → *Keeping and approving*).
+
 ### Never chain candidates
 
 The edit target is the current baseline, not yesterday's attempt. If the changes since
@@ -111,14 +114,16 @@ magick in.png -resize 25% -posterize 5 -resize 400% out.png
 ```
 
 That flattens it toward the style while keeping contours. Repaint THAT — save the
-degraded file to `sources/` and record it as the edit target in the receipt.
+degraded file to `sources/` and record it as the edit target in the receipt. In a
+Layered Scene, save it to `OUT/<scene>/sources/` with its sidecar (`SKILL.md` → *What
+each file is for*), because `gen.py` accepts it as a Layer's EDIT TARGET only then.
 
 ### The re-style pass, when the user hands you a drifted candidate
 
 When the user designates an off-style image as the *design* authority: copy it into
-`sources/` under a name recording its origin (`design-from-candidate-v008.png`), sync
-`description.md` to its design (bump + snapshot), then re-style it with the ladder
-above.
+`sources/` (for a Layered Scene, as rung 5 says) under a name recording its origin
+(`design-from-candidate-v008.png`), sync `description.md` to its design (bump +
+snapshot), then re-style it with the ladder above.
 
 **Never DESIGN-edit an off-style image** — "add a mustache" against it preserves its
 rendering, which is the problem you are trying to remove.

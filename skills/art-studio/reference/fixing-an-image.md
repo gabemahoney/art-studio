@@ -165,6 +165,38 @@ back to paths 1–3. Then still ask.
 first or second attempt at anything, or framing and composition changes — a mask
 cannot help when the whole frame has to move.
 
+## On a Layer
+
+In a Layered Scene, fix one Layer at a time, starting from its Default Version
+(`reference/layered-scenes.md` → *Revising one Layer*). The paths keep their order,
+but each must keep the Layer's alpha, and each new version is written by `gen.py
+--layer` or `layers.py record`, never by hand.
+
+- **Path 1.** Use `reference/imagemagick.md` → *Layers: alpha-aware recipes* to replace
+  a region, move content or grade, because the other region and transplant recipes
+  replace alpha. Then record the result, with one `--donor` per other version that
+  gave pixels (`<layer-id>=vNNN`, or `sources/<name>.png` for an adjusted copy):
+
+  ```bash
+  python3 $S/layers.py record --package PKG --output OUT --scene <scene> \
+    --layer <layer-id> --image $T/fixed.png --start vNNN --donor <layer-id>=vNNN \
+    --mask $T/mask.png --commands "<the ImageMagick commands, verbatim>"
+  ```
+
+- **Path 3.** Regenerate with `gen.py --layer`, editing the starting version. Replace
+  only the fixed region of the starting version with the new version's, using
+  `reference/imagemagick.md` → *Replacing a region of a Layer*. Record the composite
+  with `--start` the starting version, `--donor` the regeneration and `--mask` the mask.
+- **Path 4.** A masked `gen.py --layer` call, with the Layer Version itself as EDIT
+  TARGET and `--size` the Frame. It repaints colour only and keeps the Layer's alpha,
+  so it can't change an outline; path 3 does that. It needs a Frame size the API
+  accepts, so for any other Frame path 4 is unavailable. No masked Layer call has been
+  made here yet.
+
+Take pixels only from the same scene's Layer Versions, or adjusted copies of them,
+because anything else imports content. `record` checks only the donors you name, so
+name every one.
+
 ## Guardrails
 
 - **Everything already written is frozen** — `image.png`, and any promoted
@@ -176,8 +208,8 @@ cannot help when the whole frame has to move.
   output folder — `OUT/<scene>/masks/` — so the receipt stays reproducible.
 - **A composite you intend to keep needs its own `vNNN`**, numbered past every existing
   folder and every number in `DELETED.md`, with the image as `image.png` and a
-  hand-written `generation.md`, because `promote.py` and `--refinish` read no other
-  filenames. **That receipt must open by saying no model was called**
+  hand-written `generation.md` (on a Layer, `layers.py record` does this), because
+  `promote.py` and `--refinish` read no other filenames. **That receipt must open by saying no model was called**
   (`Source: local composite, no generation`), then name the baseline `vNNN`, the donor
   `vNNN` and the commands. Without it, a composite attached to a later generation
   passes the provenance check silently and enters the record as model history.

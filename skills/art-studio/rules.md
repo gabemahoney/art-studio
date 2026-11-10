@@ -15,6 +15,8 @@ silent fallback is how renders end up somewhere nobody meant.
 - Relative `--attach` and `--mask` paths resolve against the package, then the output
   folder, and a path present in both is refused as ambiguous. Receipts write paths as
   `package:<rel>`, `output:<rel>`, or absolute.
+- A Layered Scene's records, and the two `sources/` folders under `OUT`, are listed in
+  `SKILL.md` → *What each file is for*.
 
 ## The One Rule (prevents style drift)
 
@@ -71,6 +73,9 @@ but never replace it:
 - **EDIT TARGET** — the image being modified (an approved `reference.png`, or a
   user-designated baseline); what "preserve everything else" refers to. "This is the
   image being modified. Preserve everything the prompt does not change."
+- **PLACEMENT** — on a Layer generation only, an image of the same scene used for
+  placement, scale, perspective and light. "An image of this same scene. Use it only
+  for placement, scale and light direction. Do not copy any of its content."
 
 Rules:
 
@@ -82,6 +87,33 @@ Rules:
   never an unapproved candidate, except as a user-designated baseline or a crop
   source. Chaining candidate outputs compounds drift.
 - Ignore borders, captions, signatures, and screenshot chrome in any reference.
+
+### On a Layer generation
+
+`gen.py --layer` enforces each of these, because a Layer must hold only content made
+for this scene and this Layer (`reference/layered-scenes.md`):
+
+- PLACEMENT is one of the scene's Layer Versions, Combined Images or Drafts, or an
+  adjusted copy in `OUT/<scene>/sources/` with its sidecar.
+- At most one EDIT TARGET, and only one of the scene's Layer Versions or Combined
+  Images, or an adjusted copy of one, because anything else imports outside content. A
+  Draft is PLACEMENT only.
+- IDENTITY is never an image under `OUT/<scene>/`, because IDENTITY's wording says to
+  copy a design; use PLACEMENT. Asset `reference.png` files and cast crops in
+  `OUT/sources/` stay IDENTITY as for any scene.
+- No other file under `OUT/<scene>/`, such as `raw.png`, `final.png` or
+  `final-layers/`, in any role, because it could carry a version of the Layer past the
+  next rule.
+- Nothing holding a version of this Layer other than its starting version, the one the
+  EDIT TARGET holds; a fresh generation attaches no version of it, because an edit
+  never chains from another version.
+- No Layer Version, adjusted copy of one, or Draft off the Frame's aspect ratio.
+- Every same-scene attachment matches the md5 its records give, so a deleted, missing
+  or altered image is refused.
+
+Each attachment with alpha is sent flattened onto black, because the model ignores
+alpha and would otherwise see whatever colour lies under transparent pixels; the
+receipt names the frozen original.
 
 ## Reference validation (hard stop)
 
@@ -136,10 +168,19 @@ their arguments, so they run from anywhere.
   matches `--attach` order, so `prompt.py` and you own those.
   **`selftest.py`'s cases are the authoritative list of its refusals**, because a list
   here goes stale. `--refinish <vNNN dir>` re-derives a deliverable from an existing
-  `image.png` without generating anything, and records it on the receipt.
+  `image.png` without generating anything, and records it on the receipt. `--layer`,
+  `--draft` and `--emissive` make a Layered Scene's Layer Versions and Drafts, which get
+  no deliverable.
 - **`review.py`** and **`promote.py`** take the `vNNN` directory and read its kind from
   the path: a `vNNN` under `candidates/` is an asset candidate, anything else a scene
-  version. Each refuses to overwrite its field or head without `--replace`.
+  version. In a Layered Scene, `layers/<layer-id>/vNNN` is a Layer Version,
+  `drafts/vNNN` a Draft and `vNNN` a Combined Image; `promote.py` refuses a Draft and
+  needs `--approval` and `--based-on` for the others. Each refuses to overwrite its field or head
+  without `--replace`.
+- **`layers.py`** plans, combines, keeps, records fixes, rebuilds, checks deletions
+  and reports status for Layered Scenes, and never calls an image model.
+  `scene_state.py` holds the one copy of the Scene Journal rules that `gen.py`,
+  `promote.py` and `layers.py` share.
 
 **Presets** name a delivery spec once, in the package's optional `presets.json`:
 
@@ -155,7 +196,10 @@ never cropped, so no subject is cut off to satisfy a box.
 
 A receipt is frozen history with three exceptions, because each is known only after
 the run: **`Status`**, owned by `promote.py`; **`Review`**, owned by `review.py`; and
-**`Delivered`**, owned by `gen.py` (rewritten by `--refinish`). Never edit a receipt by
+**`Delivered`**, owned by `gen.py` (rewritten by `--refinish`). In a Layered Scene,
+Layer Versions, Drafts and Combined Images all carry `Status` and `Review`, and only
+Combined Images carry `Delivered`; `Status` there is informational, because the Scene
+Journal holds approvals. Never edit a receipt by
 hand, with one exception: a receipt older than `gen.py`'s format may lack the `Status:
 awaiting user evaluation` or `Review:` line the scripts rewrite, and then you record
 that one field by hand, once, as the script's message says.

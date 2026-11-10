@@ -7,4 +7,5 @@ renders go to an output folder outside it too. Both are passed as `--package` an
 
 Never add project-specific content (styles, assets, presets, receipts, subject names)
 to this repo. After touching anything in `skills/art-studio/scripts/`, run
-`python3 -I skills/art-studio/scripts/selftest.py`.
+`python3 -I skills/art-studio/scripts/selftest.py`. After changing `scene_state.py`,
+`layers.py` or `promote.py`, also run it with `--exhaustive`.

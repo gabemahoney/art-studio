@@ -7,6 +7,9 @@ Two locations, always given explicitly:
                   Asset work (--asset) writes its candidate here.
   --output OUT    where a scene render (--scene) lands: OUT/<scene>/vNNN/ holds the
                   image and its generation.md. A scene render never writes to PKG.
+                  A Layered Scene is made one Layer (--layer, into
+                  OUT/<scene>/layers/<id>/vNNN/) or Draft (--draft, into
+                  OUT/<scene>/drafts/vNNN/) at a time, at the scene's Frame.
 
 Enforces the package invariants in code instead of by good intentions:
   - the One Rule (anchor attached FIRST as STYLE, Style Block verbatim at top,
@@ -41,6 +44,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 import time
 import urllib.error
@@ -48,6 +52,12 @@ import urllib.request
 import uuid
 from datetime import date
 from pathlib import Path, PurePosixPath
+
+# python3 -I leaves this script's folder off sys.path; scene_state lives beside it.
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import scene_state  # noqa: E402
+from prompt import TRANSPARENT_LEAD  # noqa: E402
 
 ANCHOR = Path("ref_images/style_references/canonical_style_reference.png")
 
@@ -107,7 +117,7 @@ CODEX_MODEL = "gpt-6-astra"
 DEFAULT_SIZE = "1536x1024"
 DEFAULT_FLATTEN = "#ffffff"
 DEFAULT_MAX_MB = 2.5
-ROLES = ("STYLE", "IDENTITY", "EDIT TARGET")
+ROLES = ("STYLE", "IDENTITY", "EDIT TARGET", "PLACEMENT")
 # --backend api reads its key from OPENAI_API_KEY, or from this file (outside every
 # repo, so it can never be committed with a package). Every real paid call must carry
 # --approved-by: the user's own words approving that specific call.
@@ -453,7 +463,7 @@ def check_target(asset: str | None, scene: str | None) -> Path:
         return writable_base(PKG / "assets" / asset / "candidates")
     if OUT is None:
         raise Fail("--scene needs --output: the folder this render is delivered to")
-    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", scene):
+    if not re.fullmatch(scene_state.SLUG, scene):
         raise Fail(f"scene slug {scene!r}: use lowercase letters, digits, . _ -")
     return writable_base(OUT / scene)
 
@@ -475,6 +485,347 @@ def writable_base(base: Path) -> Path:
                            "folders. Fix its permissions (e.g. chmod u+wx) and rerun.")
             break
     return base
+
+
+def check_layer_plan(scene_dir: Path, layer: str | None, draft: bool) -> dict | None:
+    """A scene's first generation needs a Layer Plan the User confirmed, recorded with
+    layers.py plan. A scene with attempts and no plan (made before Layer Plans) and a
+    Single-Layer Scene generate as before; a Layered Scene is made one Layer (--layer)
+    or Draft (--draft) at a time. Returns the current plan."""
+    try:
+        records = scene_state.read_journal(scene_dir)
+    except scene_state.Fail as e:
+        raise Fail(str(e)) from None
+    plan = scene_state.current_plan(records)
+    if plan is None and not scene_state.generated(scene_dir, deleted_numbers):
+        raise Fail(f"scene {scene_dir.name} has no Layer Plan and nothing generated yet. "
+                   "Propose a Layer Plan (single or layered) to the User and record their "
+                   "confirmation with layers.py plan before generating.")
+    if plan is None or not plan["layered"]:
+        if layer or draft:
+            raise Fail(f"scene {scene_dir.name} is a Single-Layer Scene, so it has no "
+                       "Layers or Drafts: drop --layer/--draft and generate it as one image.")
+        return plan
+    where = f"journal/{plan['number']:03d}.json"
+    if not (layer or draft):
+        raise Fail(f"scene {scene_dir.name} is layered ({where}), so it is made one Layer "
+                   "or Draft at a time, never as one image: pass --layer <layer-id> or "
+                   "--draft.")
+    ids = [l["id"] for l in plan["layers"]]
+    if layer and layer not in ids:
+        raise Fail(f"Layer {layer!r} is not in scene {scene_dir.name}'s current Layer Plan "
+                   f"({where}), which holds, bottom to top: {', '.join(ids)}.")
+    return plan
+
+
+def layer_or_draft(folder: Path) -> bool:
+    """Whether folder is a Layer Version (<scene>/layers/<id>/vNNN) or Draft
+    (<scene>/drafts/vNNN) of a scene whose current plan is layered; a folder that only
+    happens to sit under one named layers/ or drafts/ is not."""
+    parts = Path(folder).resolve().parts
+    if len(parts) > 3 and parts[-3] == "layers":
+        scene = Path(*parts[:-3])
+    elif len(parts) > 2 and parts[-2] == "drafts":
+        scene = Path(*parts[:-2])
+    else:
+        return False
+    try:
+        return scene_state.is_layered(scene_state.read_journal(scene))
+    except scene_state.Fail:
+        return False
+
+
+def in_scene_folder(path: Path) -> bool:
+    """Whether path lies in a scene folder of the output folder (OUT/<scene>/...), as
+    opposed to OUT/sources/, where single-view cast crops live."""
+    if OUT is None or not Path(path).resolve().is_relative_to(OUT):
+        return False
+    parts = Path(path).resolve().relative_to(OUT).parts
+    return len(parts) > 1 and parts[0] != "sources"
+
+
+def check_layer_inputs(attachments: list[tuple[Path, str]], scene_dir: Path, plan: dict,
+                       layer: str | None) -> tuple[dict, Path | None]:
+    """The attachment rules for a Layer (layer given) or Draft (layer None) generation,
+    on top of check_inputs: a Layer's EDIT TARGET, PLACEMENT and IDENTITY come only from
+    where the SRD allows, every same-scene image is unaltered, and a Layer never takes
+    a Layer Version, adjusted copy of one or Draft off the Frame's aspect ratio.
+
+    Returns the md5 of each same-scene attachment, for its Inputs line, and the
+    starting version: the version of this Layer the EDIT TARGET holds, if any."""
+    targets = [p for p, r in attachments if r == "EDIT TARGET"]
+    if layer and len(targets) > 1:
+        raise Fail("a Layer generation attaches at most one EDIT TARGET; got "
+                   + ", ".join(rel_of(p) for p in targets))
+    allowed = ("this scene's Layer Versions and Combined Images, and adjusted copies of "
+               "them saved in its sources/ with a sidecar")
+    md5s = {}
+    for path, role in attachments:
+        if is_anchor(path):
+            continue
+        rel, what = rel_of(path), scene_state.classify(scene_dir, path)
+        kind = what and what["kind"]
+        if layer and role == "EDIT TARGET" and kind in (None, "draft", "other"):
+            raise Fail(f"{rel} can't be a Layer generation's EDIT TARGET: "
+                       + ("a Draft is a reference for placement, scale and light only"
+                          if kind == "draft" else "editing it would import content into "
+                          "the Layer from outside the scene")
+                       + f". A Layer's EDIT TARGET is one of {allowed}.")
+        if role == "PLACEMENT" and kind in (None, "other"):
+            raise Fail(f"{rel} can't be PLACEMENT, which takes only {allowed}, and its "
+                       "Drafts.")
+        if layer and role == "IDENTITY" and in_scene_folder(path):
+            raise Fail(f"{rel} is a scene's image, which a Layer generation never takes "
+                       "as IDENTITY: attach this scene's images as PLACEMENT (placement, "
+                       "scale and light only). Another scene's images can't be attached.")
+        if kind == "other":
+            md5s[path] = md5(path)
+        if kind in (None, "other"):
+            continue
+        record = (path.with_suffix(".md") if kind == "adjusted"
+                  else what["dir"] / "generation.md")
+        trouble = scene_state.problem(what["dir"], deleted_numbers)
+        if trouble is None and kind == "adjusted" and \
+                md5(what["dir"] / "image.png") != what["source_md5"]:
+            trouble = f"not the image its sidecar records (md5 {what['source_md5']})"
+        if trouble:
+            raise Fail(f"can't attach {rel}: {rel_of(what['dir'] / 'image.png')} is "
+                       f"{trouble}; {rel_of(record)} names it.")
+        made = what["source"]["kind"] if kind == "adjusted" else kind
+        if layer and made in ("layer", "draft") and \
+                not scene_state.ratio_matches(identify(path), plan["frame"]):
+            w, h = identify(path)
+            raise Fail(f"{rel} is {w}x{h}, which doesn't match the Frame's aspect ratio "
+                       f"({scene_state.frame_text(plan['frame'])}), so it is never "
+                       "attached to a Layer generation (its pixels can still be "
+                       "transplanted).")
+        md5s[path] = md5(path)
+    start = (scene_state.holds(scene_state.classify(scene_dir, targets[0]), layer)
+             if layer and targets else None)
+    # SR-5.5: no image holding another version of this Layer, so a version the User
+    # may have rejected never feeds the next one; a fresh generation attaches none
+    for path, _ in attachments if layer else []:
+        what = scene_state.classify(scene_dir, path)
+        if what and what["kind"] == "other":
+            raise Fail(f"{rel_of(path)} lies in the scene's folder but isn't one of its Layer "
+                       "Versions, Combined Images, Drafts or adjusted copies with a sidecar "
+                       "(final.png, final-layers/ and raw.png are copies), so which Layer "
+                       "versions it holds can't be checked: attach the record it copies.")
+        held = scene_state.holds(what, layer)
+        if held is not None and (start is None or held.resolve() != start.resolve()):
+            raise Fail(f"{rel_of(path)} holds Layer {layer}'s {held.name}, but this generation "
+                       + (f"starts from {start.name}" if start else "is fresh (no EDIT TARGET "
+                          "holds a version of it)")
+                       + f": a Layer generation attaches no image holding another version of "
+                       "its Layer. Attach a Combined Image or Draft without it, or edit "
+                       "from that version.")
+    return md5s, start
+
+
+def check_starting_version(scene_dir: Path, plan: dict, layer: str, start: Path) -> str | None:
+    """SR-5.4: a warning, naming both, when the starting version isn't the Layer's
+    Default Version. A warning, not a refusal: a retry within one step reuses the
+    step's starting version after a failed generation became the Layer's latest."""
+    try:
+        records = scene_state.read_journal(scene_dir)
+    except scene_state.Fail as e:
+        raise Fail(str(e)) from None
+    versions = scene_state.layer_versions(scene_dir, layer, plan, deleted_numbers, identify)
+    st = scene_state.layer_state(scene_state.journal_view(records), layer, versions)
+    if st["default"] is not None and st["default"]["dir"].resolve() == start.resolve():
+        return None
+    return (f"the starting version, {layer} {start.name}, isn't Layer {layer}'s Default "
+            "Version (" + (f"{st['default']['name']}, {st['default_why']}" if st["default"]
+                           else "none") + "): revise from the Default Version, unless this "
+            "retries a step that started from it")
+
+
+# ------------------------------------------------------------- Layer outputs
+
+
+def magick(*args) -> str:
+    import subprocess
+
+    return subprocess.run(["magick", *map(str, args)], check=True, capture_output=True,
+                          text=True).stdout
+
+
+def fx(path: Path, expr: str, *pre: str) -> float:
+    return float(magick(path, *pre, "-format", f"%[fx:{expr}]", "info:"))
+
+
+def separation_checks(img: Path, emissive: bool) -> list[str]:
+    """The SR-4.3 checks on a Layer generation's output, with the rules and starting
+    thresholds of Research b.gr7's `layerlab.py check` (calibration, not limits).
+    Returns failure codes; an empty list passes.
+
+    The backdrop checks read colour only when alpha is absent or unused (fewer than
+    0.1% of pixels below alpha 0.02); otherwise they would read whatever RGB lies
+    hidden under alpha 0. Unused alpha alone is not a failure."""
+    ext = ("-alpha", "extract")
+    codes = []
+    if not has_alpha(img):
+        codes.append("NO_ALPHA")
+        unused = True
+    else:
+        if fx(img, "minima", *ext) >= 0.98:     # no pixel below the solid level
+            codes.append("OPAQUE_EVERYWHERE")
+        unused = fx(img, "mean", *ext, "-threshold", "2%", "-negate") < 0.001
+    if unused:
+        flat = lambda expr: fx(img, "mean", "-alpha", "off", "-fx", f"{expr}?1:0")
+        neutral = flat("(max(r,max(g,b))-min(r,min(g,b)))<0.04 && "
+                       "(0.2126*r+0.7152*g+0.0722*b)>0.55")
+        if neutral >= 0.20:
+            codes.append(f"PAINTED_CHECKERBOARD_OR_FLAT_LIGHT_BACKDROP(neutral={neutral:.2f})")
+        for name, expr in (("GREEN", "(g-max(r,b))>0.5"), ("MAGENTA", "(min(r,b)-g)>0.5"),
+                           ("BLACK", "max(r,max(g,b))<0.04")):
+            frac = flat(expr)
+            if frac >= 0.20:
+                codes.append(f"BACKDROP_LEFT_IN_{name}({frac:.2f})")
+                # light-only content on an opaque black backdrop is glow baked onto
+                # dark too, in the form unmultiplying repairs exactly
+                if name == "BLACK" and emissive:
+                    codes.append(f"GLOW_BAKED_ON_DARK(black_backdrop={frac:.2f})")
+        return codes
+
+    # the edge ring: solid pixels (alpha >= 0.5) within 3 px of a clear one (< 0.02),
+    # whose colour shows a backdrop left in; the interior is the rest of the solid
+    with tempfile.TemporaryDirectory(prefix="gen-checks-") as tmp:
+        ring, inner = Path(tmp) / "ring.png", Path(tmp) / "inner.png"
+        magick(img, *ext, "(", "+clone", "-threshold", "2%", "-negate", "-morphology",
+               "Dilate", "Disk:3", ")", "(", "-clone", "0", "-threshold", "50%", ")",
+               "-delete", "0", "-compose", "multiply", "-composite", ring)
+        magick(img, *ext, "-threshold", "50%", ring, "-compose", "minus_src", "-composite",
+               inner)
+        stats = {}
+        for where, mask in (("ring", ring), ("inner", inner)):
+            area = fx(mask, "mean")
+            stats[where] = {"area": area}
+            for name, expr in (("dark", "(0.2126*r+0.7152*g+0.0722*b)<0.08"),
+                               ("green", "(g-max(r,b))>0.12"),
+                               ("white", "min(r,min(g,b))>0.92")):
+                hit = float(magick(img, "-alpha", "off", "-fx", f"{expr}?1:0", mask,
+                                   "-compose", "multiply", "-composite",
+                                   "-format", "%[fx:mean]", "info:"))
+                stats[where][name] = round(hit / max(area, 1e-9), 3)
+    ring, inner = stats["ring"], stats["inner"]
+    if ring["area"] > 0:
+        if ring["green"] > 0.05:
+            codes.append(f"GREEN_FRINGE(ring={ring['green']})")
+        if ring["dark"] - inner["dark"] > 0.15:
+            codes.append(f"DARK_FRINGE(ring={ring['dark']},inner={inner['dark']})")
+        if ring["white"] - inner["white"] > 0.15:
+            codes.append(f"LIGHT_FRINGE(ring={ring['white']},inner={inner['white']})")
+    if emissive and inner["dark"] > 0.10:
+        codes.append(f"GLOW_BAKED_ON_DARK(dark_solid={inner['dark']})")
+    return codes
+
+
+def unmultiply(src: Path, dest: Path) -> None:
+    """SR-4.4: light painted onto dark, made transparent. Flattened onto black,
+    alpha = max(R,G,B), colour = RGB / alpha. Exact for light added over black; never
+    for opaque content, which it would make partly transparent."""
+    with tempfile.TemporaryDirectory(prefix="gen-unmult-") as tmp:
+        onblack, a, c = (Path(tmp) / n for n in ("onblack.png", "a.png", "c.png"))
+        magick(src, "-background", "black", "-alpha", "remove", "-alpha", "off", onblack)
+        magick(onblack, "-alpha", "off", "-separate", "-evaluate-sequence", "max", a)
+        magick(onblack, a, "-channel", "RGB", "-fx", "v<=0.004?0:min(1,u/v)", "+channel", c)
+        magick(c, a, "-alpha", "off", "-compose", "CopyOpacity", "-composite",
+               "-define", "png:color-type=6", dest)
+
+
+def make_layer_version(out: Path, frame: dict, checked: bool,
+                       emissive: bool) -> tuple[list[str], list[str], bool]:
+    """Turn out/raw.png, a Layer generation's output, into out/image.png, the Layer
+    Version: checked (when the prompt carries the transparent-background block),
+    repaired when an emissive output shows glow baked onto dark, checked again, then
+    scaled to the Frame when its aspect ratio matches. raw.png stays only when
+    image.png differs from it. Returns the receipt lines, the final failures, and
+    whether the version is at the Frame."""
+    raw, image = out / "raw.png", out / "image.png"
+    rw, rh = identify(raw)
+    fw, fh = frame["width"], frame["height"]
+    lines, failures = [f"Raw size: {rw}x{rh}"], []
+    with tempfile.TemporaryDirectory(prefix="gen-layer-") as tmp:
+        src, repair = raw, None
+        if checked:
+            failures = separation_checks(raw, emissive)
+            lines.append(f"Checks: round 1, raw output: {' '.join(failures) or 'pass'}")
+            if emissive and any(f.startswith("GLOW_BAKED_ON_DARK") for f in failures):
+                src = Path(tmp) / "repaired.png"
+                unmultiply(raw, src)
+                repair = ("glow baked onto dark, unmultiplied: flattened onto black, alpha "
+                          "= max(R,G,B), colour = RGB / alpha; raw output kept as raw.png")
+                failures = separation_checks(src, emissive)
+                lines.append(f"Checks: round 2, after repair: {' '.join(failures) or 'pass'}")
+        else:
+            lines.append("Checks: not run; the prompt lacks the transparent-background block")
+        fits = scene_state.ratio_matches((rw, rh), frame)
+        if fits and (rw, rh) != (fw, fh):
+            magick(src, "-resize", f"{fw}x{fh}!", image)
+            lines.append(f"Scale: x {fw / rw:.4f}, y {fh / rh:.4f} (-resize {fw}x{fh}!)")
+        else:
+            lines.append("Scale: none; " + ("already the Frame's size" if fits else
+                         "its aspect ratio doesn't match the Frame's, so it is kept "
+                         "unscaled and doesn't count"))
+            if src == raw:
+                raw.rename(image)
+            else:
+                shutil.copyfile(src, image)
+        if repair:
+            lines.append(f"Repair: {repair}")
+    return lines, failures, fits
+
+
+def merge_masked(out: Path, start: Path, mask: Path, frame: dict,
+                 checked: bool) -> tuple[list[str], list[str], bool]:
+    """SR-6.5: turn out/raw.png, a masked Layer generation's paid output, into
+    out/image.png: the starting version with new colour inside the mask, keeping its
+    alpha everywhere and every pixel outside the mask. The API saw the starting
+    version premultiplied onto black, so the new colour is the paid colour divided by
+    the starting alpha where that is above 0, clamped to 1; in a feathered edge it is
+    mixed with the starting colour by the mask's value. Returns what
+    make_layer_version returns."""
+    raw, image = out / "raw.png", out / "image.png"
+    (rw, rh), (sw, sh) = identify(raw), identify(start)
+    if not scene_state.ratio_matches((rw, rh), {"width": sw, "height": sh}):
+        lines, failures, fits = make_layer_version(out, frame, checked, False)
+        return lines + ["Repair: none; the paid output's aspect ratio doesn't match the "
+                        "starting version's, so it wasn't merged"], failures, fits
+    lines, failures = [f"Raw size: {rw}x{rh}"], []
+    with tempfile.TemporaryDirectory(prefix="gen-merge-") as tmp:
+        paid, merged = raw, Path(tmp) / "merged.png"
+        if (rw, rh) != (sw, sh):
+            paid = Path(tmp) / "paid.png"
+            magick(raw, "-resize", f"{sw}x{sh}!", paid)
+            lines.append(f"Scale: x {sw / rw:.4f}, y {sh / rh:.4f} (-resize {sw}x{sh}!), "
+                         "the paid output to the starting version's size")
+        else:
+            lines.append("Scale: none; already the starting version's size")
+        # -fx reads a missing alpha channel wrongly, so every input gets one first; a
+        # grey start would leave -fx one colour channel, so it is read as sRGB
+        magick("(", start, "-colorspace", "sRGB", ")", "(", paid, "-alpha", "off", ")",
+               "(", mask, "-alpha", "off", "-colorspace", "Gray", ")", "-alpha", "set",
+               "-channel", "RGB", "-fx", "wm=u[2].r; u.a>0 ? (1-wm)*u+wm*min(1,v/u.a) : u",
+               "+channel", "-define", "png:color-type=6", merged)
+        if checked:
+            failures = separation_checks(merged, False)
+            lines.append(f"Checks: round 1, merged Layer Version: {' '.join(failures) or 'pass'}")
+        else:
+            lines.append("Checks: not run; the bottom Layer's prompt lacks the "
+                         "transparent-background block")
+        shutil.copyfile(merged, image)
+    lines.append(f"Repair: masked repaint (path 4) merged as colour only: inside the mask, "
+                 f"the paid colour divided by the starting version's alpha where above 0, "
+                 "clamped to 1, mixed with the starting colour by the mask's value; the "
+                 f"starting version's alpha kept everywhere, and every pixel outside the "
+                 f"mask; paid output kept as raw.png")
+    return lines, failures, scene_state.ratio_matches((sw, sh), frame)
+
+
+def flatten_onto_black(src: Path, dest: Path) -> None:
+    """SR-4.5: the model ignores alpha and sees whatever colour lies under it."""
+    magick(src, "-background", "black", "-alpha", "remove", "-alpha", "off", dest)
 
 
 def deleted_numbers(base: Path) -> set[int]:
@@ -776,13 +1127,18 @@ def generate_codex(prompt: str, attachments, model: str, size: str) -> tuple[byt
 
 def write_receipt(out: Path, args, prompt, attachments, model, usage, warnings,
                   delivered: str | None = None, provenance: str = "",
-                  raw_size: str = ""):
+                  raw_size: str = "", layered: list[str] | None = None,
+                  md5s: dict | None = None, output: str | None = None):
+    """layered: a Layer Version's or Draft's labelled lines (SRD SR-17.2), whose free
+    text, and the request and mode, are written with whitespace collapsed; md5s: each
+    same-scene attachment's md5, ending its Inputs line; output: the Output line."""
     label = (args.asset or args.scene).split("/")[-1]
+    free = norm if layered is not None else (lambda text: text)
     lines = [
-        f"# {label} {out.name}",
+        f"# {label} {out.name}" if not args.layer else f"# {label} {args.layer} {out.name}",
         "",
-        f"User request verbatim: {args.request or 'TODO — fill in'}",
-        f"Mode: {args.mode or 'TODO — fill in'}",
+        f"User request verbatim: {free(args.request or 'TODO — fill in')}",
+        f"Mode: {free(args.mode or 'TODO — fill in')}",
         f"Tool: art-studio gen.py, backend={args.backend}"
         + (" (Codex CLI built-in image_gen; underlying image model not exposed)"
            if args.backend == "codex" else " (OpenAI Images API /v1/images/edits)"),
@@ -800,19 +1156,22 @@ def write_receipt(out: Path, args, prompt, attachments, model, usage, warnings,
         f"Style: v{style_version()}",
         f"Package: {PKG}",
         *([f"Output folder: {OUT}"] if OUT is not None else []),
+        *(layered or []),
         "Inputs:",
     ]
     for i, (path, role) in enumerate(attachments, start=1):
         rel = rel_of(path)
         frozen = frozen_equivalent(path)
         suffix = f"; frozen {frozen}" if frozen not in ("n/a", "already frozen") else ""
+        if path in (md5s or {}):
+            suffix += f" md5={md5s[path]}"
         lines.append(f"- Image {i} {role}: {rel}{suffix}")
     if usage:
         lines.append(f"Token usage: {json.dumps(usage, sort_keys=True)}")
     lines += [
         f"Date: {date.today().isoformat()}",
         "Status: awaiting user evaluation",
-        f"Output: image.png, {raw_size or args.size} (raw model output, frozen)",
+        output or f"Output: image.png, {raw_size or args.size} (raw model output, frozen)",
     ]
     if delivered:
         lines.append(f"Delivered: {delivered}")
@@ -867,6 +1226,15 @@ def main() -> int:
     p.add_argument("--asset", help="<type>/<slug> under PKG/assets; the candidate is "
                                    "written into the package")
     p.add_argument("--scene", help="scene slug; needs --output")
+    p.add_argument("--layer", metavar="LAYER-ID",
+                   help="a Layered Scene: generate a version of this Layer into the next "
+                        "OUT/<scene>/layers/<layer-id>/vNNN/, at the Frame")
+    p.add_argument("--draft", action="store_true",
+                   help="a Layered Scene: generate a Draft (a whole-scene reference for "
+                        "placement, scale and light) into the next OUT/<scene>/drafts/vNNN/")
+    p.add_argument("--emissive", action="store_true",
+                   help="with --layer: the Layer's content is light only (glow, flames, "
+                        "glowing haze), so glow baked onto dark is unmultiplied")
     p.add_argument("--prompt-file", help="assembled prompt; - for stdin "
                                          "(build one with prompt.py)")
     p.add_argument("--refinish", metavar="VDIR",
@@ -910,6 +1278,20 @@ def main() -> int:
     args = p.parse_args()
     check_no_stale_bytecode()
     set_locations(args.package, args.output)
+    layered = bool(args.layer or args.draft)
+    if args.layer and args.draft:
+        raise Fail("pass --layer or --draft, not both")
+    if (layered or args.emissive) and (args.asset or args.refinish):
+        raise Fail("--layer, --draft and --emissive belong to a Layered Scene's "
+                   "generation (--scene); they have no meaning with --asset or --refinish")
+    if args.emissive and not args.layer:
+        raise Fail("--emissive marks a Layer generation whose content is light only; "
+                   "it needs --layer")
+    if args.emissive and args.mask:
+        raise Fail("--emissive has no meaning on a masked Layer generation (path 4): it keeps "
+                   "the starting version's alpha and repaints colour only, so nothing is "
+                   "unmultiplied.")
+    size_given = args.size
 
     # --size, --flatten and --max-mb default to None so that "the user passed this"
     # is simply "it is not None". A preset fills whatever was left unset; an
@@ -943,6 +1325,9 @@ def main() -> int:
                        "not be recorded. Every vNNN needs its receipt.")
         if not args.final_size:
             raise Fail("--refinish needs --final-size or --preset")
+        if layer_or_draft(raw.parent):
+            raise Fail(f"{args.refinish} is a Layered Scene's Layer Version or Draft; only "
+                       "a Combined Image gets deliverables (layers.py combine).")
         require_binary("magick", "install ImageMagick (brew install imagemagick)")
         dest, note = finish(raw, args.final_size, args.flatten, args.max_mb)
         verb = "wrote" if dest != raw else "deliverable ="
@@ -965,17 +1350,67 @@ def main() -> int:
     # Everything that can fail must fail here, before anything is billed.
     base = check_target(args.asset, args.scene)
     deleted = deleted_numbers(base)
+    plan = check_layer_plan(base, args.layer, args.draft) if args.scene else None
+    scene_dir = base
+    if layered:
+        # A Layer or Draft is made at the scene's Frame; only Combined Images get
+        # deliverables, so the delivery options belong to layers.py combine.
+        frame = scene_state.frame_text(plan["frame"])
+        if args.preset or args.final_size:
+            raise Fail("--preset and --final-size derive deliverables, which only a "
+                       "Combined Image gets (layers.py combine takes them). A Layer or "
+                       f"Draft is generated at the Frame, {frame}: drop them.")
+        if size_given:
+            m = re.fullmatch(r"(\d+)x(\d+)", size_given.strip().lower())
+            if not m or not int(m.group(2)) or not scene_state.ratio_matches(
+                    (int(m.group(1)), int(m.group(2))), plan["frame"]):
+                raise Fail(f"--size {size_given} doesn't match the Frame's aspect ratio "
+                           f"({frame}). A Layer or Draft is generated at the Frame: drop "
+                           "--size.")
+        else:
+            args.size = frame
+        base = writable_base(scene_dir / "layers" / args.layer if args.layer
+                             else scene_dir / "drafts")
+        deleted = deleted_numbers(base)
     require_binary("magick", "install ImageMagick (brew install imagemagick)")
     if args.backend == "codex":
         require_binary("codex", "install the Codex CLI, or use --backend api")
     attachments = [parse_attach(s) for s in args.attach]
     check_inputs(attachments, masked=bool(args.mask and args.backend == "api"))
+    if not args.layer and any(role == "PLACEMENT" for _, role in attachments):
+        raise Fail("PLACEMENT is a role for a Layer generation (--layer) only: the same "
+                   "scene's image, used for placement, scale and light.")
+    md5s, start = (check_layer_inputs(attachments, scene_dir, plan, args.layer)
+                   if layered else ({}, None))
+    masked_layer = bool(args.layer and args.mask and args.backend == "api")
+    target = masked_layer and attachments and scene_state.classify(scene_dir, attachments[0][0])
+    if masked_layer and not (target and target["kind"] == "layer"
+                             and target["layer"] == args.layer):
+        raise Fail(f"a masked Layer generation (path 4) repaints its starting version itself: "
+                   f"attach a version of Layer {args.layer} (layers/{args.layer}/vNNN/image.png) "
+                   "as image 1, EDIT TARGET, not a Combined Image or adjusted copy.")
     check_style_frozen()
     warnings = check_prompt(prompt, masked=bool(args.mask and args.backend == "api"))
+    if args.layer and start is not None and \
+            (w := check_starting_version(scene_dir, plan, args.layer, start)):
+        warnings.append(w)
+    checked = norm(TRANSPARENT_LEAD) in norm(prompt)
+    bottom = layered and args.layer == plan["layers"][0]["id"]
+    if masked_layer:
+        # checked on its merged Layer Version, which keeps the starting version's
+        # alpha, so it needs no block; a bottom Layer filling the Frame isn't checked
+        checked = checked or not bottom
+    elif args.layer and not checked and not bottom:
+        warnings.append(f"the prompt lacks the transparent-background block (prompt.py "
+                        f"--opaque/--soft), and {args.layer} isn't the scene's bottom "
+                        "Layer: it may come back opaque and hide every Layer beneath it, "
+                        "and the separation checks won't run.")
     for path, _ in attachments:
         frozen_equivalent(path)  # raises on any provenance failure
     for w in warnings:
         print(f"  warn: {w}", file=sys.stderr)
+    to_flatten = [i for i, (path, _) in enumerate(attachments)
+                  if args.layer and has_alpha(path)]
 
     model = args.model or (CODEX_MODEL if args.backend == "codex" else DEFAULT_MODEL)
     if args.backend == "codex":
@@ -992,7 +1427,8 @@ def main() -> int:
     print(f"  backend {args.backend}  model {model}  size {args.size}"
           + (f"  quality {args.quality}" if args.backend == "api" else ""))
     for i, (path, role) in enumerate(attachments, start=1):
-        print(f"  image {i} {role:11} {rel_of(path)}")
+        print(f"  image {i} {role:11} {rel_of(path)}"
+              + ("  (has alpha: sent flattened onto black)" if i - 1 in to_flatten else ""))
     api_mask, mask_pct = None, None
     if args.mask:
         if args.backend != "api":
@@ -1042,26 +1478,38 @@ def main() -> int:
             print("  note: a real run needs --approved-by with the user's approval")
         return 0
 
-    if args.backend == "codex":
-        blob, provenance = generate_codex(prompt, attachments, model, args.size)
-        usage = None
-    else:
-        data = generate(prompt, attachments, model, args.size, args.quality,
-                        api_key_for_call, api_mask)
-        payload = data["data"][0]
-        if "b64_json" not in payload:
-            raise Fail(f"no image in response: {json.dumps(data)[:400]}")
-        import base64
+    # A Layer generation sends each attachment with alpha as a temporary copy
+    # flattened onto black; the receipt names the frozen original.
+    sent = list(attachments)
+    flat_dir = Path(tempfile.mkdtemp(prefix="gen-flat-")) if to_flatten else None
+    try:
+        for i in to_flatten:
+            path, role = attachments[i]
+            sent[i] = (flat_dir / f"image{i + 1}-{path.name}", role)
+            flatten_onto_black(path, sent[i][0])
+        if args.backend == "codex":
+            blob, provenance = generate_codex(prompt, sent, model, args.size)
+            usage = None
+        else:
+            data = generate(prompt, sent, model, args.size, args.quality,
+                            api_key_for_call, api_mask)
+            payload = data["data"][0]
+            if "b64_json" not in payload:
+                raise Fail(f"no image in response: {json.dumps(data)[:400]}")
+            import base64
 
-        blob = base64.b64decode(payload["b64_json"])
-        usage, provenance = data.get("usage"), "OpenAI Images API, exact prompt bytes sent"
+            blob = base64.b64decode(payload["b64_json"])
+            usage, provenance = data.get("usage"), "OpenAI Images API, exact prompt bytes sent"
+    finally:
+        if flat_dir is not None:
+            shutil.rmtree(flat_dir, ignore_errors=True)
 
     if api_mask is not None:
         api_mask.unlink(missing_ok=True)   # converted copy; the user mask is the record
 
     try:
         out = target_dir(base, deleted)
-        raw = out / "image.png"
+        raw = out / ("raw.png" if args.layer else "image.png")
         raw.write_bytes(blob)
     except OSError as e:
         # Pre-flight passed but the target broke while the backend ran. The image is
@@ -1072,7 +1520,8 @@ def main() -> int:
         raise Fail(f"could not save the generated image under {base} "
                    f"({e.strerror or e}). It was saved to {kept} instead; no receipt "
                    "was written. Fix the target before the next run.") from None
-    print(f"  wrote {raw}")
+    if not args.layer:
+        print(f"  wrote {raw}")
 
     delivered = None
     if args.final_size:
@@ -1081,10 +1530,64 @@ def main() -> int:
         print(f"  {verb} {dest}  ({delivered})")
 
     rw, rh = identify(raw)
+    head, output = (layer_receipt(out, args, plan, checked, start, to_flatten, attachments,
+                                  warnings, resolve(args.mask) if masked_layer else None)
+                    if layered else (None, None))
     write_receipt(out, args, prompt, attachments, model, usage, warnings,
-                  delivered, provenance, f"{rw}x{rh}")
+                  delivered, provenance, f"{rw}x{rh}", head, md5s, output)
     print(f"  wrote {out / 'generation.md'}")
     return 0
+
+
+def layer_receipt(out: Path, args, plan: dict, checked: bool, start: Path | None,
+                  flattened: list[int], attachments, warnings: list[str],
+                  mask: Path | None = None):
+    """Finish a Layer Version or Draft in out/ and return its receipt lines (SRD
+    SR-3.8, SR-17.2) and Output line. Prints what the Caller must tell the User."""
+    frame = scene_state.frame_text(plan["frame"])
+    head = [f"Kind: {'Layer Version' if args.layer else 'Draft'}"]
+    if args.layer:
+        entry = next(l["entry"] for l in plan["layers"] if l["id"] == args.layer)
+        head += [f"Layer: {args.layer}", f"Layer Entry: {norm(entry)}"]
+    head += [f"Layer Plan: journal/{plan['number']:03d}.json", f"Frame: {frame}"]
+    image = out / "image.png"
+    if not args.layer:
+        rw, rh = identify(image)
+        if not scene_state.ratio_matches((rw, rh), plan["frame"]):
+            warnings.append(f"this Draft is {rw}x{rh}, which doesn't match the Frame's "
+                            f"aspect ratio ({frame}); it is kept like any attempt. Tell "
+                            "the User.")
+            print(f"  NOTE: {warnings[-1]}")
+        head.append(f"md5: {md5(image)}")
+        return head, None
+
+    got, failures, fits = (merge_masked(out, start / "image.png", mask, plan["frame"], checked)
+                           if mask is not None else
+                           make_layer_version(out, plan["frame"], checked, args.emissive))
+    pick = lambda label: [l for l in got if l.startswith(f"{label}:")]
+    head += pick("Raw size") + pick("Scale") + [
+        "Starting version: " + (rel_of(start) if start else "none; generated fresh"),
+        "Flattened: " + ("; ".join(f"image {i + 1} {rel_of(attachments[i][0])}"
+                                   for i in flattened)
+                         + " onto black (#000000); the originals are unchanged"
+                         if flattened else "none; no attachment has an alpha channel"),
+    ] + pick("Checks") + pick("Repair") + [f"md5: {md5(image)}"]
+    w, h = identify(image)
+    kept = (out / "raw.png").exists()
+    print(f"  wrote {image}  (the Layer Version" + ("; the raw output stays as raw.png)"
+                                                     if kept else ")"))
+    if not fits:
+        warnings.append(f"the raw output, {w}x{h}, doesn't match the Frame's aspect ratio "
+                        f"({frame}): it is kept unscaled, so this Layer Version doesn't "
+                        "count. Tell the User and show it to them on its own.")
+        print(f"  NOTE: {warnings[-1]}")
+    for f in failures:
+        print(f"  separation check failed: {f}", file=sys.stderr)
+    if failures:
+        print("  The Layer Version fails the separation checks above: regenerate it, "
+              "restating the transparent-background block.", file=sys.stderr)
+    return head, (f"Output: image.png, {w}x{h} (the Layer Version, frozen)"
+                  + ("; raw.png (the raw output, frozen)" if kept else ""))
 
 
 if __name__ == "__main__":
