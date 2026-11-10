@@ -6,6 +6,9 @@ folder.**
 
 ## Confining an operation to a region
 
+For an image without alpha. On a Layer use *Replacing a region of a Layer*, because
+step 3 replaces the image's alpha with the mask.
+
 Make an adjusted copy of the whole image, give it the mask as its alpha, lay it over
 the original. Swap line 2's operation for anything at all — tonal, colour, blur,
 sharpen.
@@ -160,6 +163,9 @@ stamp reads `118.11 PixelsPerCentimeter` — that *is* 300 DPI. An unstamped PNG
 
 ## Transplants between candidates
 
+For images without alpha; on a Layer use *Replacing a region of a Layer*, for the same
+reason as *Confining an operation to a region*.
+
 Crop the piece, mask it, match its brightness, place it:
 
 ```bash
@@ -192,3 +198,82 @@ magick $T/a2.png $T/b2.png -background '#333' -splice 0x6 -append $T/cmp.png
 ```
 
 Inspect every contested detail at **300–500%** before calling it fixed.
+
+## Layers: alpha-aware recipes
+
+A Layer (`reference/layered-scenes.md`) is an RGBA image, so these keep its alpha.
+
+### Viewing transparency
+
+View a Layer Version or Combined Image over a checkerboard, white and black, cropped to
+the contested area and magnified, because a fringe shows only against a contrasting
+backdrop and partial transparency only against a pattern:
+
+```bash
+F=OUT/<scene>/layers/<layer-id>/vNNN/image.png      # or OUT/<scene>/vNNN/image.png
+WH=$(magick identify -format %wx%h "$F")
+magick \( -size $WH pattern:checkerboard "$F" -composite \) \
+  \( -size $WH xc:white "$F" -composite \) \( -size $WH xc:black "$F" -composite \) \
+  -crop 400x300+600+350 +repage -scale 400% -background '#333' -splice 8x0 +append \
+  $T/view.png
+```
+
+### Measuring alpha
+
+```bash
+magick identify -format '%[channels]\n' f.png        # srgba: it has an alpha channel
+magick f.png -alpha extract -format 'alpha min %[fx:minima] max %[fx:maxima]\n' info:
+magick f.png -alpha extract -threshold 0 -negate \
+  -format 'fully transparent: %[fx:mean*100]%%\n' info:
+magick f.png -alpha extract -fx 'u>0 && u<1' \
+  -format 'partly transparent: %[fx:mean*100]%%\n' info:
+```
+
+### Replacing a region of a Layer
+
+This mixes colour and alpha by the mask, premultiplied, so pixels outside the mask stay
+unchanged and a feathered edge between two opaque areas stays opaque. Build the mask as
+in *Masks*, at the Frame's size, adding `-black-threshold 2%` after `-blur`, because
+`layers.py record` counts mask pixels at or below 2% as outside and a blur's faint tail
+would make a correct fix warn. `-colorspace sRGB` keeps a grey Layer's colour, and
+`-alpha set` gives an image without alpha an opaque one, because `-fx` misreads a
+missing alpha channel. Name any `-fx` variable you add with two or more letters, because
+single letters such as `m` are channel names.
+
+```bash
+START=OUT/<scene>/layers/<layer-id>/vNNN/image.png   # the version being fixed
+NEW=OUT/<scene>/layers/<layer-id>/vNNN/image.png     # the donor, e.g. a regeneration
+magick \( "$START" -colorspace sRGB \) \( "$NEW" -colorspace sRGB \) \
+  \( $T/mask.png -alpha off -colorspace Gray \) -alpha set \
+  -fx 'wm=u[2].r; aa=(1-wm)*u.a+wm*v.a; channel(((1-wm)*u.r*u.a+wm*v.r*v.a)/max(aa,1e-9), ((1-wm)*u.g*u.a+wm*v.g*v.a)/max(aa,1e-9), ((1-wm)*u.b*u.a+wm*v.b*v.a)/max(aa,1e-9), 0, aa)' \
+  -define png:color-type=6 $T/fixed.png
+```
+
+Verify it before recording. `layers.py record ... --mask $T/mask.png --dry-run` warns,
+with a count, when any pixel outside the mask changed. This must print 0, or the fix
+made opaque content see-through:
+
+```bash
+magick $T/fixed.png "$START" "$NEW" -alpha set -fx 'u.a<1 && v.a==1 && u[2].a==1' \
+  -alpha off -colorspace Gray -precision 10 \
+  -format 'opaque pixels made see-through: %[fx:round(mean*w*h)]\n' info:
+```
+
+**Moving or scaling content within a Layer** uses the same recipe. Shift or scale the
+whole Layer onto a transparent canvas, then replace the region covering both the old
+and the new position, with that image as `NEW`:
+
+```bash
+WH=$(magick identify -format %wx%h "$START")
+magick -size $WH xc:none "$START" -geometry +30+0 -composite $T/shifted.png
+magick -size $WH xc:none \( "$START" -resize 80% \) -geometry +40+20 -composite \
+  $T/scaled.png
+```
+
+### Grading a Layer
+
+Apply colour operations to the colour channels only, so alpha is untouched:
+
+```bash
+magick "$START" -channel RGB -evaluate multiply 0.9 +channel $T/graded.png
+```

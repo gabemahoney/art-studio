@@ -1,6 +1,6 @@
 ---
 name: art-studio
-description: Make, revise and approve illustrations in one locked visual style — characters, locations, items, vehicles, and scenes built from them — so a recurring cast stays consistent across a project. Works against a package (the style and its recurring subjects) and an output folder (where scenes land), both given as paths. Use for any illustration or image-generation request, even when the skill is not named: setting up a package or style anchor, designing or revising a character or asset sheet, composing a scene, fixing or touching up a generated image, deleting or promoting a candidate. Not for charts, diagrams, UI mockups or edits to images unrelated to illustration work.
+description: Make, revise and approve illustrations in one locked visual style — characters, locations, items, vehicles, and scenes built from them — so a recurring cast stays consistent across a project. Works against a package (the style and its recurring subjects) and an output folder (where scenes land), both given as paths. Use for any illustration or image-generation request, even when the skill is not named: setting up a package or style anchor, designing or revising a character or asset sheet, composing a scene (as one image or in separately revisable layers), fixing or touching up a generated image, deleting or promoting a candidate. Not for charts, diagrams, UI mockups or edits to images unrelated to illustration work.
 ---
 
 # Art studio
@@ -36,8 +36,11 @@ PKG/
   style_versions/          frozen style-vN.md + canonical_style_reference-vN.png
   assets/<type>/<slug>/    one folder per recurring subject
 OUT/
+  sources/                 single-view cast crops, shared by every scene
   <scene>/vNNN/            image.png + generation.md (+ any delivered-WxH.png), one per attempt
   <scene>/final.png        the approved scene, + final.md
+  <scene>/journal/         Layer Plans, keeps and approvals (every new scene)
+  <scene>/layers/ drafts/ sources/ final-layers/   a Layered Scene's records
 ```
 
 `<type>` is any category you invent — `personas`, `locations`, `items`, `ships`.
@@ -63,23 +66,37 @@ contract and is the same for every package.
 | `reference.png` | **the approved picture.** The only image a scene may build from | `promote.py` |
 | `reference.md` | the sidecar naming which candidate it came from, plus the user's approval verbatim. **Without it the asset counts as unapproved and `gen.py` refuses to attach it** | `promote.py` |
 | `sources/` | user-supplied originals, crops and composite inputs | you |
+| **per output folder** — `OUT/` | | |
+| `sources/` | single-view cast crops (`reference/writing-prompts.md` → *Give a scene one single-view crop per cast member*) | you |
 | **per scene** — `OUT/<scene>/` | | |
-| `vNNN/image.png` + `vNNN/generation.md` | exactly like an asset's candidates | `gen.py` |
-| `DELETED.md` | the deletion log, as for an asset | you |
+| `vNNN/image.png` + `vNNN/generation.md` | exactly like an asset's candidates; in a Layered Scene, a **Combined Image** whose receipt names each Layer Version it stacks | `gen.py`; `layers.py` |
+| `DELETED.md` | the deletion log, as for an asset; a Layered Scene also keeps one in each `layers/<layer-id>/` and in `drafts/` | you |
 | `final.png` + `final.md` | the approved scene and its sidecar | `promote.py` |
+| `journal/NNN.json` | the **Scene Journal**: one record per Layer Plan, keep or approval, with the user's words verbatim. A scene without one predates Layer Plans and is single | `layers.py`, `promote.py` |
+| `masks/` | masks a receipt cites | you; `layers.py record` |
+| **Layered Scene only** — `OUT/<scene>/` | | |
+| `layers/<layer-id>/vNNN/` | a **Layer Version**: `image.png` (at the Frame's size when its aspect ratio matches), its receipt, and `raw.png` when the raw output was scaled or repaired | `gen.py --layer`; `layers.py record` |
+| `drafts/vNNN/` | a **Draft**, a whole-scene placement reference that is never approved | `gen.py --draft` |
+| `sources/<name>.png` + `<name>.md` | an adjusted copy of one of this scene's Layer Versions or Combined Images (a signal-degraded or re-style copy); the sidecar holds `Derived from: output:<path> md5=<md5>` and `Command: <how it was made>` | you |
+| `final-layers/NN-<layer-id>.png` | byte copies of the approved Combined Image's Layer Versions, bottom first | `promote.py` |
 
 Two kinds of file, and the distinction is the whole design: **heads** are mutable and
-hold the current state (`description.md`, `reference.png`, `final.png`, `style.md`).
+hold the current state (`description.md`, `reference.png`, `final.png`,
+`final-layers/`, `style.md`).
 **Revisions** are written once and never touched again (everything under
-`candidates/`, `OUT/<scene>/vNNN/`, `*_versions/`, `sources/`), except the deletion
+`candidates/`, `vNNN/`, `journal/`, `*_versions/`, `sources/`), except the deletion
 log `DELETED.md`, which is appended to.
 
 **Status is never recorded separately — the files are the status.**
 
 - An asset is approved iff `reference.png` exists *and* passes its provenance check.
-- A scene is done iff `final.png` exists.
+- A scene is done iff `final.png` exists; for a Layered Scene, iff its journal holds a
+  scene approval, which `final.png` copies.
 - The latest attempt is the highest-numbered `vNNN`.
 - The current design is `description.md`; its header line gives the version.
+- A scene is layered iff its latest plan record in `journal/` is. `layers.py status`
+  derives the rest of its state from the journal and the record folders alone, never
+  from `final*` or `Status` lines.
 
 ### Setting up a new package
 
@@ -120,7 +137,10 @@ Nothing is invented at generation time. Before a prompt exists:
   sentence the model cannot use. Relative wording belongs only in the prompt, and
   only when an edit target is attached.
 - **Scene** → read each cast member's `description.md` and write a scene spec to a
-  scratch file: action, pose, expression, setting, light, framing, aspect ratio.
+  scratch file: action, pose, expression, setting, light, framing, aspect ratio. For a
+  new scene, first propose a Layer Plan, single or layered, and record the user's
+  confirmation with `layers.py plan` (`reference/layered-scenes.md` → *Planning*),
+  because `gen.py` refuses a new scene without one.
 
 ### 2. Assemble the prompt
 
@@ -227,6 +247,9 @@ because a wrong baseline is the most expensive mistake available here. It is
 `reference.png` unless the user designated a candidate by approving it while asking
 for a change.
 
+**Layered Scene:** each Layer and Draft runs this loop, and `layers.py combine` stacks
+the Layers into Combined Images; follow `reference/layered-scenes.md`.
+
 **Scene: never invent design.** Restate it from `description.md` so the model has no
 room to improvise. If an asset has no valid `reference.png`, stop and tell the user
 which asset needs promoting first — do not improvise it and do not work around the
@@ -254,7 +277,11 @@ provenance check.
   deletion destroys receipts. If the user insists after being warned, log each removed
   attempt as `vNNN` with three or more digits (`v003`; `v3` is ignored) in
   `candidates/DELETED.md` for an asset or `OUT/<scene>/DELETED.md` for a scene, and
-  list no other `vNNN` there, because `gen.py` numbers past every logged one.
+  list no other `vNNN` there, because `gen.py` numbers past every logged one. In a
+  Layered Scene, run `layers.py check-delete` first and never delete what it refuses,
+  because approvals and Combined Images depend on those folders, and log each folder
+  in the `DELETED.md` beside it: in `layers/<layer-id>/`, `drafts/` or the scene
+  folder.
 - **At most FIVE attachments**, so budget anchor + baseline + identities to five;
   `gen.py` refuses a sixth before anything runs.
 - **Never spend API credits without asking.** `--backend codex`, the default, bills
@@ -278,7 +305,10 @@ all.
   `reference/fixing-an-image.md`: routes the change to the cheapest tool and sets the
   bar for proposing credits.
 - **ImageMagick commands** → `reference/imagemagick.md`: masks, tonal work, measurement,
-  crops, deliverables, transplants, inspection.
+  crops, deliverables, transplants, inspection, and alpha-aware recipes for Layers.
+- **A Layered Scene, or choosing whether a new scene is one** →
+  `reference/layered-scenes.md`: planning, making, combining, keeping, approving,
+  revising and changing the plan.
 
 ### Two habits worth building
 

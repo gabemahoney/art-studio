@@ -77,6 +77,35 @@ matched or beat sheets and a lineup on likeness and never did that.
   individual sheets, because the scene inherits the lineup's own drift and stiff row.
   If it carries lettering, ban reproducing its numbers.
 
+## Prompt a Layer so it separates
+
+A Layer of a Layered Scene (`reference/layered-scenes.md`) gets its transparency only
+from the prompt, because the image tool takes no transparency setting. Build it with
+`prompt.py`'s Layer options:
+
+```bash
+python3 $S/prompt.py --package PKG --role STYLE: --role PLACEMENT: \
+  --layer-name "<layer-id>" --below "<what lies beneath>" --above "<what lies above>" \
+  --opaque "<its solid subjects>" --soft "<its glow, flames or haze>" \
+  --spec-file "$T/spec.txt" -o "$T/prompt.txt"
+```
+
+- `--layer-name`, `--below` and `--above` say the image is one Layer and what lies
+  around it, so the model paints only this Layer's subjects.
+- `--opaque` and `--soft` add the transparent-background block, which every Layer
+  prompt carries, edits included, because the model ignores an EDIT TARGET's alpha and
+  otherwise returns the Layer opaque. Only a bottom Layer that fills the Frame omits
+  it; `gen.py` warns about any other.
+- Name in the spec what not to paint from a PLACEMENT image ("paint none of the rocks
+  or ships"), because the model may copy it.
+- Say in a lower Layer's spec that it is painted whole where upper Layers will cover it
+  ("the whole disc, including where the ships cross it"), because moving an upper
+  subject later reveals it.
+- Put glow, flames and haze under `--soft`, so the Layers beneath show through them.
+  Generate a Layer whose content is light only with `gen.py --emissive`, which repairs
+  glow baked onto black. Never mark other Layers emissive, because the repair makes
+  opaque content partly transparent.
+
 ## Attach the minimum identity input
 
 Full source → crop → nothing. Attach the least that carries information the design

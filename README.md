@@ -22,9 +22,9 @@ sourcebook and an adventure just by changing `--output`.
 |---|---|
 | `skills/art-studio/SKILL.md` | The package layout, the six-step loop every image goes through, the rules that are never optional. |
 | `skills/art-studio/rules.md` | How generations run. The same for every package. |
-| `skills/art-studio/scripts/` | `prompt.py` → `gen.py` → `review.py` → `promote.py`, plus `selftest.py`. Stdlib only, no venv. |
+| `skills/art-studio/scripts/` | `prompt.py` → `gen.py` → `review.py` → `promote.py`; `layers.py` for Layered Scenes, with `scene_state.py` beneath it; `selftest.py`. Stdlib only, no venv. |
 | `skills/art-studio/templates/style.md` | Starting point for a new package's `style.md`. |
-| `skills/art-studio/reference/` | Writing prompts, diagnosing a bad image, routing a fix, ImageMagick commands. |
+| `skills/art-studio/reference/` | Writing prompts, diagnosing a bad image, routing a fix, ImageMagick commands, Layered Scenes. |
 
 ## Installing the skill
 
