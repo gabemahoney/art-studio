@@ -49,7 +49,7 @@ class Stale(Fail):
 
 
 def norm(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    return " ".join(text.split())   # as re.sub(r"\s+", " ", text).strip(), faster
 
 
 def same_entry(a: str, b: str) -> bool:
@@ -92,6 +92,11 @@ def read_journal(scene_dir: Path) -> list[dict]:
             raise Fail(f"{f} is not a whole plan record: it needs date, words and "
                        "layered, and a layered plan a frame and its layers. Records are "
                        "never edited; restore it from a backup.")
+        if rec["kind"] != "plan" and not well_formed_decision(rec):
+            raise Fail(f"{f} is not a whole {rec['kind']} record: it needs date, words "
+                       + ("and combined, md5 and layers" if rec["kind"] == "scene-approval"
+                          else "and layer, version and md5")
+                       + ". Records are never edited; restore it from a backup.")
         if n in records:
             raise Fail(f"{jdir} holds record {n} twice. Records are never renamed; "
                        "restore the journal from a backup.")
@@ -142,6 +147,20 @@ def well_formed_plan(rec: dict) -> bool:
             and isinstance(layers, list)
             and all(isinstance(l, dict) and isinstance(l.get("id"), str)
                     and isinstance(l.get("entry"), str) for l in layers))
+
+
+def well_formed_decision(rec: dict) -> bool:
+    """A keep, Layer approval or scene approval record holds what SR-1.4 says it names."""
+    named = lambda d: (isinstance(d, dict) and isinstance(d.get("layer"), str)
+                       and isinstance(d.get("version"), str)
+                       and VNNN.fullmatch(d["version"]) is not None
+                       and isinstance(d.get("md5"), str))
+    if not (isinstance(rec.get("date"), str) and isinstance(rec.get("words"), str)):
+        return False
+    if rec["kind"] == "scene-approval":
+        return (isinstance(rec.get("combined"), str) and isinstance(rec.get("md5"), str)
+                and isinstance(rec.get("layers"), list) and all(map(named, rec["layers"])))
+    return named(rec)
 
 
 def latest(records: list[dict]) -> int:
@@ -227,50 +246,280 @@ def layer_versions(scene_dir: Path, layer_id: str, plan: dict, deleted_numbers,
                    size_of) -> list[dict]:
     """Each recorded version of a Layer, with whether it counts (SR-8.1) and why not.
 
-    A version counts when its Layer is in the current plan, its image.png is the
-    Frame's pixel size, and the Layer Entry its receipt records says the same as the
-    Layer's current one. size_of is gen.identify, passed in."""
-    current = {l["id"]: l["entry"] for l in plan["layers"]}
-    out = []
+    size_of is gen.identify, passed in; assess() decides what counts."""
+    found = []
     for v in folders(Path(scene_dir) / "layers" / layer_id, deleted_numbers):
         v["layer"], v["entry"] = layer_id, read_receipt(v["dir"]).get("Layer Entry")
         v["size"] = None if v["deleted"] else sized(v["dir"], size_of)
+        found.append(v)
+    return assess(found, layer_id, plan)
+
+
+def assess(versions: list[dict], layer_id: str, plan: dict) -> list[dict]:
+    """SR-8.1, apart from file access: copies of one Layer's versions (each with
+    "entry", "size" and "deleted"), each with "counts" and "why_not" added.
+
+    A version counts when its Layer is in the current plan, its image.png is the
+    Frame's pixel size, and the Layer Entry its receipt records says the same as the
+    Layer's current one."""
+    current = next((l["entry"] for l in plan["layers"] if l["id"] == layer_id), None)
+    frame = (plan["frame"]["width"], plan["frame"]["height"])
+    out = []
+    for v in versions:
         why = []
         if v["deleted"]:
             why.append("deleted")
-        elif layer_id not in current:
-            why.append("its Layer is not in the current plan")
-        elif v["size"] is None:
-            why.append("image.png is missing or unreadable")
-        elif v["size"] != (plan["frame"]["width"], plan["frame"]["height"]):
-            w, h = v["size"]
-            why.append(f"{w}x{h} doesn't match the Frame's aspect ratio"
-                       if not ratio_matches(v["size"], plan["frame"])
-                       else f"{w}x{h} is not the Frame's pixel size")
-        if (not v["deleted"] and layer_id in current
-                and not same_entry(v["entry"] or "", current[layer_id])):
+        else:
+            if current is None:
+                why.append("its Layer is removed (not in the current plan)")
+            if v["size"] is None:
+                why.append("image.png is missing or unreadable")
+            elif v["size"] != frame:
+                w, h = v["size"]
+                why.append(f"{w}x{h} doesn't match the Frame's aspect ratio"
+                           if not ratio_matches(v["size"], plan["frame"])
+                           else f"{w}x{h} is not the Frame's pixel size")
+        if not v["deleted"] and current is not None and not same_entry(v["entry"] or "",
+                                                                        current):
             why.append("made under another Layer Entry")
-        v["counts"], v["why_not"] = not why, why
-        out.append(v)
+        out.append({**v, "counts": not why, "why_not": why})
     return out
 
 
-def latest_version(versions: list[dict]) -> dict | None:
-    """A Layer's latest version: its highest-numbered counting version."""
-    counting = [v for v in versions if v["counts"]]
-    return counting[-1] if counting else None
-
-
-def approved_version(records: list[dict], layer_id: str) -> dict | None:
-    """SR-8.2: the version the latest Layer or scene approval naming the Layer names.
-    Nothing records an approval yet, so no Layer has one."""
+def find(versions: list[dict], name: str) -> dict | None:
+    if m := VNNN.fullmatch(name):
+        n = int(m.group(1))
+        for v in versions:
+            if v["number"] == n:
+                return v
     return None
 
 
-def default_version(records: list[dict], versions: list[dict]) -> dict | None:
-    """A Layer's Default Version (SR-8.5). With no keeps or approvals recorded, it is
-    the Layer's latest version, or None."""
-    return latest_version(versions)
+# ------------------------------------------------------- which version is used
+
+
+APPROVALS = ("layer-approval", "scene-approval")
+
+
+def named_versions(rec: dict) -> dict[str, str]:
+    """{layer: vNNN} for each Layer Version a keep or approval record names."""
+    if rec["kind"] == "scene-approval":
+        return {l["layer"]: l["version"] for l in rec["layers"]}
+    return {rec["layer"]: rec["version"]} if rec["kind"] in ("keep", "layer-approval") else {}
+
+
+def journal_view(records: list[dict]) -> dict:
+    """What SR-8 reads from the journal, in one pass: the current plan, the latest
+    scene approval, and per Layer its latest approval record (SR-8.2) and the keep
+    still in force by the journal (SR-8.4: no later keep or approval of that Layer,
+    and every later plan holds it with a Layer Entry that says the same as when it was
+    kept). Whether the kept version is deleted is checked against the versions."""
+    view = {"records": records, "latest": latest(records), "plan": None,
+            "scene_approval": None, "approval": {}, "keep": {}, "ever": []}
+    entries: dict[str, str] = {}     # each Layer's entry under the plan read so far
+    kept_under: dict[str, str] = {}
+    for r in records:
+        if r["kind"] == "plan":
+            view["plan"] = r
+            entries = {l["id"]: l["entry"] for l in r["layers"]} if r["layered"] else {}
+            view["ever"] += [lid for lid in entries if lid not in view["ever"]]
+            for lid in [k for k in view["keep"]
+                        if k not in entries or not same_entry(entries[k], kept_under[k])]:
+                del view["keep"][lid]   # removed or its Layer Entry changed: ended for good
+            continue
+        for lid in named_versions(r):
+            if r["kind"] == "keep":
+                view["keep"][lid], kept_under[lid] = r, entries.get(lid, "")
+            else:
+                view["approval"][lid] = r
+                view["keep"].pop(lid, None)
+        if r["kind"] == "scene-approval":
+            view["scene_approval"] = r
+    return view
+
+
+def layer_state(view: dict, layer_id: str, versions: list[dict]) -> dict:
+    """One Layer's versions in use, from the journal view and its assessed versions:
+    "approval" (the record) and "approved" (its version, counting or not, None when
+    that folder is gone), "keep" and "kept" (the keep in force), "latest", and
+    "default" with "default_why" (SR-8.5: kept, approved or latest; None for none)."""
+    approval, keep = view["approval"].get(layer_id), view["keep"].get(layer_id)
+    approved = approval and find(versions, named_versions(approval)[layer_id])
+    kept = keep and find(versions, keep["version"])
+    if kept is not None and kept["deleted"]:
+        keep = kept = None   # deleting a kept version ends its keep (SR-8.4)
+    counting = [v for v in versions if v["counts"]]
+    latest_v = counting[-1] if counting else None
+    for why, v in (("kept", kept), ("approved", approved), ("latest", latest_v)):
+        if v and v["counts"]:
+            break
+    else:
+        why, v = None, None
+    return {"approval": approval, "approved": approved or None, "keep": keep,
+            "kept": kept or None, "latest": latest_v, "default": v, "default_why": why}
+
+
+def layered_view(records: list[dict]) -> dict:
+    view = journal_view(records)
+    if not (view["plan"] and view["plan"]["layered"]):
+        raise Fail("this scene is not a Layered Scene (" + describe(view["plan"]) + "), so "
+                   "it has no Layers to keep or approve.")
+    return view
+
+
+def check_keep(view: dict, layer_id: str, versions: list[dict], name: str) -> dict:
+    """SR-8.3: refuse a keep of a version that doesn't count. Returns the version."""
+    ids = [l["id"] for l in view["plan"]["layers"]]
+    if layer_id not in ids:
+        raise Fail(f"Layer {layer_id!r} is not in the current Layer Plan "
+                   f"(journal/{view['plan']['number']:03d}.json), so none of its versions "
+                   "can be kept.")
+    v = find(versions, name)
+    if v is None:
+        raise Fail(f"Layer {layer_id} has no version {name} (layers.py status lists them)")
+    if not v["counts"]:
+        raise Fail(f"Layer {layer_id}'s {v['name']} doesn't count ({'; '.join(v['why_not'])}), "
+                   "so it can't be kept.")
+    return v
+
+
+def check_layer_approval(view: dict, layer_id: str, versions: list[dict], name: str,
+                         replace: bool) -> dict | None:
+    """SR-10.2 and SR-10.3. Returns the approval record this one replaces, if any."""
+    v = find(versions, name)
+    if v is None:
+        raise Fail(f"Layer {layer_id} has no version {name} (layers.py status lists them)")
+    if not v["counts"]:
+        raise Fail(f"Layer {layer_id}'s {v['name']} can't be approved: "
+                   + "; ".join(v["why_not"]) + ".")
+    before = view["approval"].get(layer_id)
+    was = before and named_versions(before)[layer_id]
+    if was and was != v["name"] and not replace:
+        raise Fail(f"Layer {layer_id}'s Approved Layer Version is {was} "
+                   f"(journal/{before['number']:03d}.json, counting or not). Name it to the "
+                   "User, and pass --replace if they approved superseding it.")
+    return before
+
+
+def check_scene_approval(view: dict, versions: dict[str, list[dict]], stack: list[dict],
+                         replace: bool) -> dict:
+    """SR-10.5 and SR-10.6 for a Combined Image whose stack is [{"layer", "version"}],
+    bottom first; versions holds every Layer's assessed versions. Returns what the
+    approval replaces: "scene" (the latest scene approval, or None) and "layers"
+    ({"layer", "version", "record"} for each Layer it holds whose Approved Layer
+    Version, counting or not, is another version)."""
+    ids = [l["id"] for l in view["plan"]["layers"]]
+    held = [s["layer"] for s in stack]
+    fails = [f"{lid}: missing from the Combined Image" for lid in ids if lid not in held]
+    fails += [f"{lid}: " + ("removed" if lid in view["ever"] else "not in any Layer Plan")
+              for lid in held if lid not in ids]
+    now = [lid for lid in held if lid in ids]
+    fails += [f"{lid}: in an old order" for lid, want in
+              zip(now, [lid for lid in ids if lid in held]) if lid != want]
+    for s in stack:
+        if s["layer"] not in ids:
+            continue
+        v = find(versions.get(s["layer"], []), s["version"])
+        if v is None:
+            fails.append(f"{s['layer']}: holds {s['version']}, which isn't recorded")
+        elif not v["counts"]:
+            fails.append(f"{s['layer']}: {v['name']} " + "; ".join(
+                "is made under a different Layer Entry" if w == "made under another Layer Entry"
+                else w for w in v["why_not"]))
+    if fails:
+        raise Fail("this Combined Image can't be approved: " + "; ".join(fails)
+                   + f". The current plan (journal/{view['plan']['number']:03d}.json) holds, "
+                   f"bottom to top: {', '.join(ids)}.")
+    scene, layers = view["scene_approval"], []
+    for s in stack:
+        if (r := view["approval"].get(s["layer"])) and \
+                (was := named_versions(r)[s["layer"]]) != s["version"]:
+            layers.append({"layer": s["layer"], "version": was, "record": r["number"]})
+    if (scene or layers) and not replace:
+        named = ([f"the approved image {scene['combined'].rsplit('/', 1)[-1]} "
+                  f"(journal/{scene['number']:03d}.json)"]
+                 if scene else []) + [
+            f"Layer {l['layer']}'s Approved Layer Version {l['version']} "
+            f"(journal/{l['record']:03d}.json, counting or not)" for l in layers]
+        raise Fail("approving it would replace " + "; ".join(named) + ". Name these to the "
+                   "User, and pass --replace if they approved superseding them.")
+    return {"scene": scene, "layers": layers}
+
+
+def journal_problem(records: list[dict], layer_id: str, folder: Path) -> str | None:
+    """SR-1.8 for journal records: how a Layer Version's image.png differs from the md5
+    a keep or approval record naming it records, or None."""
+    folder, found = Path(folder), None
+    for r in records:
+        if named_versions(r).get(layer_id) != folder.name:
+            continue
+        want = r["md5"] if r["kind"] != "scene-approval" else next(
+            l["md5"] for l in r["layers"] if l["layer"] == layer_id)
+        if found is None:
+            found = md5(folder / "image.png") if (folder / "image.png").is_file() else ""
+        if found != want:
+            return f"not the md5 {want} that journal/{r['number']:03d}.json records"
+    return None
+
+
+# ------------------------------------------------- the approved image's copies
+
+
+def layer_files(rec: dict) -> list[tuple[str, dict]]:
+    """SR-17.4: final-layers/NN-<layer-id>.png for each Layer a scene approval record
+    names, from 01 at the bottom, with what the record says of it."""
+    return [(f"{i:02d}-{l['layer']}.png", l) for i, l in enumerate(rec["layers"], start=1)]
+
+
+def final_md(rec: dict) -> str:
+    """final.md for a scene approval record (SR-10.8): today's provenance, approval,
+    date and md5 lines, then the Layer files in stacking order."""
+    return "\n".join([
+        f"Promoted from {rec['combined'].rsplit('/', 1)[-1]}",
+        f"User approval, verbatim: {rec['words']}",
+        "",
+        f"Date: {rec['date']}",
+        f"md5: {rec['md5']}",
+        f"Scene approval record: journal/{rec['number']:03d}.json",
+        "Layer files, bottom to top (final-layers/, each a byte copy of the Layer Version "
+        "it names):",
+        *(f"- {name}: layers/{l['layer']}/{l['version']} md5={l['md5']}"
+          for name, l in layer_files(rec)),
+        "A Layer's Approved Layer Version can later differ from its Layer file: approving "
+        "a Layer Version on its own leaves these files unchanged (layers.py status names "
+        "each Layer's).",
+        "",
+    ])
+
+
+def copies_mismatch(scene_dir: Path, rec: dict) -> list[str]:
+    """How final.png, final.md and final-layers/ differ from the latest scene approval
+    record (SR-10.9); empty when they match."""
+    scene_dir, out = Path(scene_dir), []
+    final, md, folder = scene_dir / "final.png", scene_dir / "final.md", scene_dir / "final-layers"
+    if not final.is_file() or md5(final) != rec["md5"]:
+        out.append("final.png " + ("is missing" if not final.is_file() else
+                                   "is not the approved Combined Image"))
+    try:
+        md_ok = md.read_text() == final_md(rec)
+    except OSError:
+        md_ok = False
+    if not md_ok:
+        out.append("final.md " + ("is missing" if not md.is_file() else
+                                  "doesn't match the scene approval record"))
+    want = dict(layer_files(rec))
+    have = {p.name: p for p in folder.iterdir() if not p.name.startswith(".")} \
+        if folder.is_dir() else {}   # Finder's .DS_Store is not a Layer file
+    if not folder.is_dir():
+        out.append("final-layers/ is missing")
+    else:
+        out += [f"final-layers/{n} is missing" for n in want if n not in have]
+        out += [f"final-layers/{n} isn't a Layer file of the approved image"
+                for n in have if n not in want]
+        out += [f"final-layers/{n} is not a byte copy of {l['layer']} {l['version']}"
+                for n, l in want.items() if n in have and
+                (not have[n].is_file() or md5(have[n]) != l["md5"])]
+    return out
 
 
 def classify(scene_dir: Path, path: Path, follow: bool = True) -> dict | None:
@@ -308,6 +557,12 @@ def classify(scene_dir: Path, path: Path, follow: bool = True) -> dict | None:
                 return {"kind": "adjusted", "source": src, "source_md5": m.group(2),
                         "dir": src["dir"]}
     return {"kind": "other"}
+
+
+def stack_of(receipt: dict) -> list[dict]:
+    """A Combined Image receipt's stack as [{"layer", "version"}], bottom first."""
+    return [{"layer": s["layer"], "version": s["path"].rsplit("/", 1)[-1]}
+            for s in receipt.get("stack", [])]
 
 
 def holds(info: dict | None, layer_id: str) -> Path | None:

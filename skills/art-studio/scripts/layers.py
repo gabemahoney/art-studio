@@ -17,7 +17,13 @@ rebuild checks one against its receipt.
   python3 scripts/layers.py combine --package ~/my-art --output ~/book/art \
       --scene harbour --use boats=v002 --preset book-float
   python3 scripts/layers.py rebuild ... --scene harbour --combined v003
+  python3 scripts/layers.py keep ... --scene harbour --layer boats --version v002 \
+      --words "Close. Keep that one, but bluer." --based-on 4
+  python3 scripts/layers.py check-delete ... --scene harbour ~/book/art/harbour/layers/boats/v001
   python3 scripts/layers.py status --package ~/my-art --output ~/book/art --scene harbour
+
+promote.py approves a Layer Version or a Combined Image; it, keep and plan are the
+commands that write the Scene Journal.
 
 Every command that records a decision takes --based-on N: the journal number its dry
 run printed, i.e. the state the User was shown. If the journal has moved on since,
@@ -136,6 +142,101 @@ def cmd_plan(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------- keep, check-delete
+
+
+def cmd_keep(args) -> int:
+    """SR-8.3: record that the User keeps a Layer Version, making it the Layer's
+    Default Version (SR-8.5) without approving it."""
+    if not args.dry_run and args.based_on is None:
+        raise Fail("--based-on is required: the journal number the dry run printed, "
+                   "so a decision is never recorded against a state the User wasn't shown")
+    if not args.words.strip():
+        raise Fail("--words is required: the User's words keeping this version, verbatim")
+    scene = scene_dir(args)
+    records = scene_state.read_journal(scene)                   # read
+    view = scene_state.layered_view(records)
+    versions = scene_layers(scene, view["plan"], [args.layer])[args.layer]
+    v = scene_state.check_keep(view, args.layer, versions, args.version)   # check
+    if trouble := scene_state.problem(v["dir"], gen.deleted_numbers):
+        raise Fail(f"Layer {args.layer}'s {v['name']} can't be kept: "
+                   f"{gen.rel_of(v['dir'] / 'image.png')} is {trouble}; "
+                   f"{gen.rel_of(v['dir'] / 'generation.md')} names it.")
+    if trouble := scene_state.journal_problem(records, args.layer, v["dir"]):
+        raise Fail(f"Layer {args.layer}'s {v['name']} can't be kept: "
+                   f"{gen.rel_of(v['dir'] / 'image.png')} is {trouble}.")
+    st = scene_state.layer_state(view, args.layer, versions)
+    if st["kept"] is not None and st["kept"]["number"] == v["number"]:
+        raise Fail(f"Layer {args.layer}'s {v['name']} is already kept "
+                   f"(journal/{st['keep']['number']:03d}.json); nothing recorded.")
+
+    print(f"  scene {args.scene}: keep Layer {args.layer}'s {v['name']}. It becomes the "
+          "Layer's Default Version, without approving it, until a version of the Layer is "
+          "approved, another is kept, its Layer Entry changes or the Layer is removed.")
+    if st["keep"]:
+        print(f"  this ends the keep of {st['keep']['version']} "
+              f"(journal/{st['keep']['number']:03d}.json)")
+    if args.dry_run:
+        print(f"  dry run: nothing written. To record the User's words, pass --based-on "
+              f"{view['latest']}.")
+        return 0
+    scene_state.check_based_on(records, args.based_on)
+    gen.writable_base(scene_state.journal_dir(scene))
+    dest = scene_state.publish(scene, {                         # publish
+        "number": view["latest"] + 1, "kind": "keep", "date": date.today().isoformat(),
+        "words": args.words, "layer": args.layer, "version": v["name"],
+        "md5": scene_state.md5(v["dir"] / "image.png")})
+    print(f"  wrote {dest}")
+    return 0
+
+
+def cmd_check_delete(args) -> int:
+    """SR-11.1: whether a Layer Version, Draft or Combined Image folder may be deleted.
+    A Layer's Approved Layer Version, or a version any Combined Image's receipt names,
+    never may, even if the User insists."""
+    scene = scene_dir(args)
+    records, plan = layered_plan(scene, "check")
+    folder = Path(args.folder).expanduser().resolve()
+    what = scene_state.classify(scene, folder / "image.png")
+    if not what or what["kind"] not in ("layer", "draft", "combined") or what["dir"] != folder:
+        raise Fail(f"{args.folder} is not one of scene {args.scene}'s Layer Version, Draft or "
+                   "Combined Image folders.")
+    view, notes = scene_state.journal_view(records), []
+    if int(folder.name[1:]) in gen.deleted_numbers(folder.parent):
+        print(f"  {gen.rel_of(folder)} is already deleted (its deletion log records it)")
+        return 0
+    if not folder.is_dir():
+        raise Fail(f"{gen.rel_of(folder)} doesn't exist, so there is nothing to delete.")
+    if what["kind"] == "layer":
+        lid = what["layer"]
+        st = scene_state.layer_state(view, lid, scene_layers(scene, plan, [lid])[lid])
+        why = []
+        if st["approval"] and scene_state.named_versions(st["approval"])[lid] == folder.name:
+            why.append(f"it is Layer {lid}'s Approved Layer Version (journal/"
+                       f"{st['approval']['number']:03d}.json; counting or not)")
+        users = [c["name"] for c in scene_state.folders(scene, gen.deleted_numbers)
+                 if not c["deleted"] and any(
+                     s["path"] == gen.rel_of(folder)
+                     for s in scene_state.read_receipt(c["dir"]).get("stack", []))]
+        if users:
+            why.append("the receipts of Combined Images " + ", ".join(users) + " name it")
+        if why:
+            raise Fail(f"{gen.rel_of(folder)} may not be deleted, even if the User insists: "
+                       + "; and ".join(why) + ".")
+        if st["keep"] and st["keep"]["version"] == folder.name:
+            notes.append(f"deleting it ends its keep (journal/{st['keep']['number']:03d}.json)")
+    elif what["kind"] == "combined" and view["scene_approval"] and \
+            view["scene_approval"]["combined"] == gen.rel_of(folder):
+        notes.append(f"it is the scene's approved image (journal/"
+                     f"{view['scene_approval']['number']:03d}.json); final.png and "
+                     "final-layers/ could then no longer be completed from it")
+    print(f"  {gen.rel_of(folder)} may be deleted under today's rule, only if the User insists "
+          f"after being warned: log it as {folder.name} in {gen.rel_of(folder.parent)}/DELETED.md")
+    for n in notes:
+        print(f"  note: {n}")
+    return 0
+
+
 # -------------------------------------------------------------------- status
 
 
@@ -165,23 +266,63 @@ def cmd_status(args) -> int:
     return 0
 
 
+WHY = {"kept": "kept", "approved": "its Approved Layer Version",
+       "latest": "its latest version"}
+
+
+def journal_ref(rec: dict) -> str:
+    return f"journal/{rec['number']:03d}.json, {rec['date']}: {scene_state.norm(rec['words'])}"
+
+
 def layered_status(scene: Path, records: list[dict], plan: dict) -> list[str]:
-    """SR-12.1: each Layer's versions, whether each counts and why not, its Default
-    Version; the Drafts; the Combined Images; and every integrity problem."""
+    """SR-12.1: each Layer's versions, whether each counts and why not, its approval,
+    keep and Default Version; removed Layers; the Drafts; the Combined Images, which
+    can be approved, and the approved one; and every integrity problem."""
     lines, problems = ["  Layers, bottom to top:"], []
     rel = lambda p: str(Path(p).relative_to(scene))
-    for lid, versions in scene_layers(scene, plan).items():
+    view = scene_state.journal_view(records)
+    current = [l["id"] for l in plan["layers"]]
+    gone = [lid for lid in view["ever"] if lid not in current]
+    layers = scene_layers(scene, plan, current + gone)
+    for lid, versions in layers.items():
+        removed = lid in gone
+        if gone and lid == gone[0]:
+            lines.append("  removed Layers:")
         lines.append(f"    {lid}:" + ("" if versions else " no versions yet"))
         for v in versions:
             lines.append(f"      {v['name']}  " + ("counts" if v["counts"] else
                          "doesn't count: " + "; ".join(v["why_not"])))
-            if not v["deleted"] and (trouble := scene_state.problem(v["dir"], gen.deleted_numbers)):
+            if not v["deleted"] and (trouble := scene_state.problem(v["dir"], gen.deleted_numbers)
+                                     or scene_state.journal_problem(records, lid, v["dir"])):
                 problems.append(f"{rel(v['dir'] / 'image.png')} is {trouble}")
-        if versions:
-            default = scene_state.default_version(records, versions)
-            lines.append("      Default Version: " + (f"{default['name']} (its latest version)"
-                         if default else "none (no counting version)")
-                         + "; Approved Layer Version: none")
+        st = scene_state.layer_state(view, lid, versions)
+        for what, rec, there in (("approval", st["approval"], st["approved"]),
+                                 ("keep", st["keep"], st["kept"])):
+            if rec and there is None:
+                problems.append(f"journal/{rec['number']:03d}.json ({what}) names {lid} "
+                                f"{scene_state.named_versions(rec)[lid]}, whose folder is gone")
+        if st["approval"]:
+            name = scene_state.named_versions(st["approval"])[lid]
+            approved = name + ("" if st["approved"] is None or st["approved"]["counts"]
+                               else " (doesn't count)") + (" (its folder is gone)"
+                                                           if st["approved"] is None else "")
+        else:
+            approved = "none"
+        if not removed and versions:
+            d = st["default"]
+            lines.append("      Default Version: " + (f"{d['name']} ({WHY[st['default_why']]})"
+                         if d else "none (no counting version)")
+                         + f"; Approved Layer Version: {approved}")
+        elif removed:
+            lines.append(f"      Approved Layer Version: {approved}")
+        if st["approval"]:
+            lines.append(f"      approved in {journal_ref(st['approval'])}")
+        if st["keep"]:
+            lines.append(f"      kept: {st['keep']['version']} in {journal_ref(st['keep'])}")
+        if not removed and st["latest"] and st["default"] is not st["latest"]:
+            lines.append(f"      its newest counting version, {st['latest']['name']}, isn't its "
+                         "Default Version: before a step that doesn't revise this Layer, ask "
+                         "the User whether to keep it")
     drafts = scene_state.folders(scene / "drafts", gen.deleted_numbers)
     lines.append("  Drafts:" + (" none" if not drafts else ""))
     for d in drafts:
@@ -194,6 +335,7 @@ def layered_status(scene: Path, records: list[dict], plan: dict) -> list[str]:
             problems.append(f"{rel(d['dir'] / 'image.png')} is {trouble}")
     combined = scene_state.folders(scene, gen.deleted_numbers)
     lines.append("  Combined Images:" + (" none" if not combined else ""))
+    approvable = []
     for c in combined:
         if c["deleted"]:
             lines.append(f"    {c['name']}  deleted")
@@ -204,12 +346,38 @@ def layered_status(scene: Path, records: list[dict], plan: dict) -> list[str]:
                      for bad in rec.get("stack_errors", [])]
         lines.append(f"    {c['name']}  " + (", ".join(
             f"{s['layer']} {s['path'].rsplit('/', 1)[-1]}" for s in stack) or "no Stack recorded"))
+        sound = not rec.get("stack_errors") and rec.get("Kind") == "Combined Image"
         if trouble := scene_state.problem(c["dir"], gen.deleted_numbers):
             problems.append(f"{rel(c['dir'] / 'image.png')} is {trouble}")
+            sound = False
         for s in stack:
             if trouble := stack_problem(scene, s):
                 problems.append(f"{c['name']}'s Stack line {s['position']} names "
                                 f"{s['path']}, which {trouble}")
+                sound = False
+        if sound and stack:
+            try:
+                replaces = scene_state.check_scene_approval(view, layers, scene_state.stack_of(rec),
+                                                               True)
+            except scene_state.Fail:
+                continue
+            named = ([f"the approved image {replaces['scene']['combined'].rsplit('/', 1)[-1]}"]
+                     if replaces["scene"] else []) + [
+                f"{l['layer']} {l['version']}" for l in replaces["layers"]]
+            approvable.append(c["name"] + (f" (with --replace: replaces {', '.join(named)})"
+                                           if named else ""))
+    lines.append("  can be approved now: " + (", ".join(approvable) or "none"))
+    sa = view["scene_approval"]
+    if sa is None:
+        lines.append("  approved image: none")
+    else:
+        lines.append(f"  approved image: {sa['combined'].rsplit('/', 1)[-1]}, approved in "
+                     f"{journal_ref(sa)}")
+        lines += [f"    final-layers/{name}: {l['layer']} {l['version']}"
+                  for name, l in scene_state.layer_files(sa)]
+        problems += [f"{m}: run promote.py on {sa['combined'].rsplit('/', 1)[-1]} to complete "
+                     f"the copies from journal/{sa['number']:03d}.json"
+                     for m in scene_state.copies_mismatch(scene, sa)]
     lines.append("  integrity problems:" + (" none" if not problems else ""))
     lines += [f"    {p}" for p in problems]
     return lines
@@ -233,9 +401,10 @@ def stack_problem(scene: Path, s: dict) -> str | None:
 # ------------------------------------------------------------------- combine
 
 
-def scene_layers(scene: Path, plan: dict) -> dict[str, list[dict]]:
-    return {l["id"]: scene_state.layer_versions(scene, l["id"], plan, gen.deleted_numbers,
-                                                gen.identify) for l in plan["layers"]}
+def scene_layers(scene: Path, plan: dict, ids: list[str] | None = None) -> dict[str, list[dict]]:
+    """Each Layer's assessed versions: the current plan's Layers, or the ids given."""
+    return {lid: scene_state.layer_versions(scene, lid, plan, gen.deleted_numbers, gen.identify)
+            for lid in (ids if ids is not None else [l["id"] for l in plan["layers"]])}
 
 
 def layered_plan(scene: Path, command: str) -> tuple[list[dict], dict]:
@@ -336,20 +505,25 @@ def cmd_combine(args) -> int:
     # the stack: each chosen current Layer in the current order, at its named version
     # or its Default Version; a Layer with no counting version is left out
     layers, stack, left_out = scene_layers(scene, plan), [], []
+    view, approved = scene_state.journal_view(records), {}
     for lid in ids:
         if only is not None and lid not in only:
             continue
+        st = scene_state.layer_state(view, lid, layers[lid])
+        approved[lid] = st["approved"]
         if lid in use:
             v = next((v for v in layers[lid] if v["number"] == use[lid]), None)
             if v is None:
                 raise Fail(f"--use {lid}=v{use[lid]:03d}: Layer {lid} has no such version "
                            "(layers.py status lists them)")
         else:
-            v = scene_state.default_version(records, layers[lid])
+            v = st["default"]
             if v is None:
                 left_out.append(lid)
                 continue
         stack.append(v)
+    is_approved = lambda v: (approved[v["layer"]] is not None
+                             and approved[v["layer"]]["number"] == v["number"])
     if not stack:
         raise Fail("no Layer " + ("--only names" if only else "of the current plan")
                    + " has a counting version, so there is nothing to combine. Generate "
@@ -360,6 +534,9 @@ def cmd_combine(args) -> int:
             raise Fail(f"Layer {v['layer']}'s {v['name']} can't be combined: "
                        f"{gen.rel_of(image)} is {trouble}; "
                        f"{gen.rel_of(v['dir'] / 'generation.md')} names it.")
+        if trouble := scene_state.journal_problem(records, v["layer"], v["dir"]):
+            raise Fail(f"Layer {v['layer']}'s {v['name']} can't be combined: "
+                       f"{gen.rel_of(image)} is {trouble}.")
         if v["size"] != (frame["width"], frame["height"]):
             w, h = v["size"]
             raise Fail(f"Layer {v['layer']}'s {v['name']} is {w}x{h}, which "
@@ -383,7 +560,8 @@ def cmd_combine(args) -> int:
           "bottom to top:")
     for i, v in enumerate(stack, start=1):
         how = ("named with --use" if v["layer"] in use else "its Default Version")
-        print(f"    {i:2} {v['layer']} {v['name']}  ({how}; not its Approved Layer Version"
+        print(f"    {i:2} {v['layer']} {v['name']}  ({how}; "
+              + ("its" if is_approved(v) else "not its") + " Approved Layer Version"
               + ("" if v["counts"] else "; doesn't count: " + "; ".join(v["why_not"])) + ")")
     if left_out:
         print(f"    left out, with no counting version: {', '.join(left_out)}")
@@ -424,7 +602,8 @@ def cmd_combine(args) -> int:
         "Stack:",
         *(f"{i}. {v['layer']} {gen.rel_of(v['dir'])} "
           f"md5={scene_state.md5(v['dir'] / 'image.png')} style={styles[v['layer']]} "
-          f"approved=no removed=no entry={scene_state.norm(v['entry'] or '')}"
+          f"approved={'yes' if is_approved(v) else 'no'} removed=no "
+          f"entry={scene_state.norm(v['entry'] or '')}"
           for i, v in enumerate(stack, start=1)),
         f"ImageMagick: {imagemagick_version()}",
         f"Command: {shown(cmd, built, image)}",
@@ -557,6 +736,24 @@ def main(argv: list[str] | None = None) -> int:
     co.add_argument("--dry-run", action="store_true",
                     help="print the stack and its warnings; build and write nothing")
     co.set_defaults(func=cmd_combine)
+
+    kp = sub.add_parser("keep", parents=[common],
+                        help="record that the User keeps a Layer Version: it becomes the "
+                             "Layer's Default Version, not approved")
+    kp.add_argument("--layer", required=True, metavar="ID")
+    kp.add_argument("--version", required=True, metavar="vNNN")
+    kp.add_argument("--words", required=True, metavar="WORDS",
+                    help="the User's words keeping it, verbatim")
+    kp.add_argument("--based-on", type=int, metavar="N",
+                    help="the journal number the dry run printed (required unless --dry-run)")
+    kp.add_argument("--dry-run", action="store_true", help="say what keeping does; write nothing")
+    kp.set_defaults(func=cmd_keep)
+
+    cd = sub.add_parser("check-delete", parents=[common],
+                        help="report whether a Layer Version, Draft or Combined Image folder "
+                             "may be deleted; writes nothing")
+    cd.add_argument("folder", help="the vNNN folder")
+    cd.set_defaults(func=cmd_check_delete)
 
     rb = sub.add_parser("rebuild", parents=[common],
                         help="rebuild a Combined Image from its receipt into a scratch file "

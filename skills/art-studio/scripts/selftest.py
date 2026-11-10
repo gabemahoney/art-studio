@@ -22,15 +22,19 @@ sys.dont_write_bytecode = True
 
 import base64
 import builtins
+import collections
 import contextlib
 import errno
+import functools
 import io
+import itertools
 import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -151,11 +155,12 @@ def main() -> int:
     if shutil.which("magick") is None:
         print("  skip: ImageMagick (magick) is not installed")
         return 1
-    tmp = Path(tempfile.mkdtemp(prefix="art-studio-selftest-"))
+    tmp, started = Path(tempfile.mkdtemp(prefix="art-studio-selftest-")), time.monotonic()
     try:
         return run_checks(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        print(f"  selftest wall time: {time.monotonic() - started:.1f} s")
 
 
 def run_checks(tmp: Path) -> int:
@@ -1358,14 +1363,17 @@ def run_checks(tmp: Path) -> int:
 
     # combine on a two-Layer and a six-Layer scene: subsets, named versions, and the
     # style-version and opaque-everywhere warnings (a haze Layer doesn't warn)
-    def fake_version(slug: str, lid: str, image: Path, entry: str, style: str = "v1") -> None:
-        d = out / slug / "layers" / lid / "v001"
+    def fake_version(slug: str, lid: str, image: Path, entry: str, style: str = "v1") -> str:
+        """A Layer Version made with ImageMagick, in the Layer's next vNNN folder."""
+        base = out / slug / "layers" / lid
+        d = base / f"v{1 + max((int(p.name[1:]) for p in base.glob('v[0-9]*')), default=0):03d}"
         d.mkdir(parents=True)
         shutil.copyfile(image, d / "image.png")
         (d / "generation.md").write_text(
-            f"# {slug} {lid} v001\n\nStyle: {style}\nKind: Layer Version\nLayer: {lid}\n"
+            f"# {slug} {lid} {d.name}\n\nStyle: {style}\nKind: Layer Version\nLayer: {lid}\n"
             f"Layer Entry: {entry}\nmd5: {gen.md5(image)}\nStatus: awaiting user evaluation\n"
             "Review: pending — record with review.py\n")
+        return d.name
 
     plan("duo", *LF, "--layer", "bg=Sky", "--layer", "top=A wall", *YES, "--based-on", "0")
     fake_version("duo", "bg", flat_png, "Sky")
@@ -1476,8 +1484,840 @@ def run_checks(tmp: Path) -> int:
            code != 0 and code2 != 0 and "plan unchanged; nothing recorded" in msg
            and "plan unchanged" in msg2 and journal("space") == before, msg + msg2)
 
+    # --- keeps and approvals (SR-8, SR-10): the PRD's bluer planet, keeps ended by an
+    # approval, a Layer Entry change and a removal, then a scene approval and its copies
+    def approve(rel: str, *args: str) -> tuple[int, str]:
+        return script("promote.py", str(out / rel), *args)
+
+    def status_of(slug: str) -> str:
+        return layers_cmd("status", slug)[1]
+
+    BP = "bluer"
+    PE, AE, SE = ("The ringed planet and stars", "The asteroid field",
+                  "The two ships and their engine glow")
+    plan(BP, *LF, "--layer", f"planet={PE}", "--layer", f"asteroids={AE}",
+         "--layer", f"ships={SE}", *YES, "--based-on", "0")
+    blues = [img(f"blue{i}.png", f"xc:#2030{c}", *disc(f"#55{c}cc", 60, 54, 30))
+             for i, c in ((1, "60"), (2, "90"), (3, "c0"), (4, "f0"))]
+    rocks_a = img("rocks-a.png", "xc:none", *disc("#888070", 120, 40, 12))
+    rocks_b = img("rocks-b.png", "xc:none", *disc("#888070", 140, 70, 10))
+    fake_version(BP, "planet", blues[0], PE)
+    pv1 = out / BP / "layers/planet/v001"
+
+    code, msg = approve(f"{BP}/layers/planet/v001", "--dry-run")
+    report("promote.py --dry-run on a Layer Version names what it approves and the number "
+           "to pass", code == 0 and "as Layer planet's Approved Layer Version" in msg
+           and "--based-on 1" in msg and journal(BP) == ["001.json"], msg)
+    words = "Planet v1 is right.\nLock it in."
+    code, msg = approve(f"{BP}/layers/planet/v001", "--approval", words, "--based-on", "1")
+    rec = record(BP, 2) if code == 0 else {}
+    report("approving a Layer Version on its own writes one Layer approval record, words "
+           "verbatim", code == 0 and rec.get("kind") == "layer-approval"
+           and (rec.get("layer"), rec.get("version")) == ("planet", "v001")
+           and rec.get("md5") == gen.md5(pv1 / "image.png") and rec.get("words") == words
+           and rec.get("replaces") is None
+           and "Status: approved as Layer planet's Approved Layer Version on " in
+           (pv1 / "generation.md").read_text() and not (out / BP / "final.png").exists(),
+           f"{msg}\n{rec}")
+
+    fake_version(BP, "asteroids", rocks_a, AE)
+    fake_version(BP, "ships", ships_png, SE)
+    code, msg = layers_cmd("combine", BP)
+    report("a Layer approved before the others had versions is in later Combined Images",
+           code == 0 and [(s["layer"], s["path"][-4:], s["approved"]) for s in
+                          receipt(f"{BP}/v001")["stack"]]
+           == [("planet", "v001", "yes"), ("asteroids", "v001", "no"), ("ships", "v001", "no")]
+           and "1 planet v001  (its Default Version; its Approved Layer Version)" in msg, msg)
+    code, msg = approve(f"{BP}/layers/ships/v001", "--approval", "Those ships, yes.",
+                        "--based-on", "2")
+    fake_version(BP, "asteroids", rocks_b, AE)
+    code2, msg2 = layers_cmd("combine", BP, "--use", "asteroids=v002", "--mode", "asteroid step")
+    report("the next asteroid step's Combined Image holds the approved planet and ships",
+           code == code2 == 0 and [(s["layer"], s["path"][-4:], s["approved"]) for s in
+                                   receipt(f"{BP}/v002")["stack"]]
+           == [("planet", "v001", "yes"), ("asteroids", "v002", "no"), ("ships", "v001", "yes")],
+           msg + msg2)
+
+    # the bluer planet: v2 kept, v3 shown but not kept, then v3 approved over v1
+    fake_version(BP, "planet", blues[1], PE)
+    layers_cmd("combine", BP, "--use", "planet=v002", "--mode", "bluer planet step")
+    code, msg = layers_cmd("keep", BP, "--layer", "planet", "--version", "v002",
+                           "--words", "Close, but bluer still.", "--dry-run")
+    code2, msg2 = layers_cmd("keep", BP, "--layer", "planet", "--version", "v002",
+                             "--words", "Close, but bluer still.", "--based-on", "3")
+    rec = record(BP, 4) if code2 == 0 else {}
+    st = status_of(BP)
+    report("keeping planet v2 makes it the Default Version without approving it",
+           code == code2 == 0 and "--based-on 3" in msg and journal(BP)[-1] == "004.json"
+           and rec.get("kind") == "keep" and rec.get("version") == "v002"
+           and rec.get("md5") == gen.md5(out / BP / "layers/planet/v002/image.png")
+           and "      Default Version: v002 (kept); Approved Layer Version: v001" in st
+           and "      kept: v002 in journal/004.json, " in st, msg + msg2 + st)
+    fake_version(BP, "planet", blues[2], PE)
+    st = status_of(BP)
+    code, msg = layers_cmd("combine", BP, "--mode", "ships step")
+    report("a newer planet v3 doesn't end the keep, and status says v3 isn't the Default "
+           "Version", code == 0 and "      Default Version: v002 (kept); Approved Layer "
+           "Version: v001" in st and "its newest counting version, v003, isn't its Default "
+           "Version" in st and receipt(f"{BP}/v004")["stack"][0]["path"].endswith("planet/v002"),
+           st + msg)
+    code, msg = approve(f"{BP}/layers/planet/v003", "--approval", "That blue.", "--based-on", "4")
+    report("approving planet v3 over v1 without --replace is refused, naming v1",
+           code != 0 and "Approved Layer Version is v001 (journal/002.json" in msg
+           and "--replace" in msg and journal(BP)[-1] == "004.json", msg)
+    code, msg = approve(f"{BP}/layers/planet/v003", "--approval", "That blue. Approve it.",
+                        "--based-on", "4", "--replace")
+    rec, st = (record(BP, 5) if code == 0 else {}), status_of(BP)
+    report("approving planet v3 with --replace replaces v1 and ends the keep",
+           code == 0 and rec.get("replaces") == {"record": 2, "version": "v001"}
+           and "it replaces v001 (journal/002.json)" in msg
+           and "      Default Version: v003 (its Approved Layer Version); Approved Layer "
+               "Version: v003" in st and "kept: v002" not in st, msg + st)
+
+    # keeps end, for good, on a Layer Entry change and on a removal
+    layers_cmd("keep", BP, "--layer", "asteroids", "--version", "v001", "--words", "Keep the "
+               "first field.", "--based-on", "5")
+    st = status_of(BP)
+    report("a keep in force can name a version older than the Layer's latest",
+           "      Default Version: v001 (kept); Approved Layer Version: none" in st
+           and "its newest counting version, v002, isn't its Default Version" in st, st)
+    keep_plan = ["--layer", "planet=@1", "--layer", "asteroids=The asteroid field and dust",
+                 "--layer", "ships=@1"]
+    code, msg = plan(BP, *LF, *keep_plan, *YES, "--based-on", "6")
+    code2, msg2 = plan(BP, *LF, "--layer", "planet=@1", "--layer", "asteroids=@1",
+                       "--layer", "ships=@1", *YES, "--based-on", "7")
+    st = status_of(BP)
+    report("a keep ends on a Layer Entry change, and changing it back doesn't restore it",
+           code == code2 == 0 and "kept: v001 in journal/006.json" not in st
+           and "      Default Version: v002 (its latest version); Approved Layer Version: none"
+           in st, msg + msg2 + st)
+    fake_version(BP, "ships", ships2_png, SE)
+    layers_cmd("keep", BP, "--layer", "ships", "--version", "v002", "--words", "Use these.",
+               "--based-on", "8")
+    code, msg = plan(BP, *LF, "--layer", "planet=@1", "--layer", "asteroids=@1", *YES,
+                     "--based-on", "9")
+    st_removed = status_of(BP)
+    code2, msg2 = plan(BP, *LF, "--layer", "planet=@1", "--layer", "asteroids=@1",
+                       "--layer", "ships=@1", *YES, "--based-on", "10")
+    st = status_of(BP)
+    report("a keep ends on its Layer's removal; put back, the Layer's approval counts again "
+           "and the keep doesn't", code == code2 == 0
+           and "  removed Layers:" in st_removed and "kept: v002" not in st_removed
+           and "      Approved Layer Version: v001" in st_removed
+           and "      Default Version: v001 (its Approved Layer Version); Approved Layer "
+               "Version: v001" in st and "kept: v002" not in st, st_removed + st)
+
+    # the scene approval: one record, then final.png, final.md and final-layers/
+    code, msg = layers_cmd("combine", BP, "--mode", "the whole scene")
+    st = status_of(BP)
+    code2, msg2 = approve(f"{BP}/v005", "--dry-run")
+    code3, msg3 = approve(f"{BP}/v005", "--approval", "Approve the scene.", "--based-on", "11")
+    rec = record(BP, 12) if code3 == 0 else {}
+    held = [("planet", "v003"), ("asteroids", "v002"), ("ships", "v001")]
+    files = sorted(p.name for p in (out / BP / "final-layers").iterdir()) \
+        if (out / BP / "final-layers").is_dir() else []
+    report("status lists the Combined Image as approvable, and the dry run names its Layers",
+           code == code2 == 0 and re.search(r"^  can be approved now: .*\bv005$", st, re.M)
+           and "planet v003, asteroids v002, ships v001" in msg2 and "--based-on 11" in msg2,
+           st + msg2)
+    report("approving a Combined Image writes one scene approval record, final.png, final.md "
+           "and one byte-identical Layer file per Layer",
+           code3 == 0 and journal(BP)[-1] == "012.json" and rec.get("kind") == "scene-approval"
+           and rec.get("combined") == f"output:{BP}/v005"
+           and [(l["layer"], l["version"]) for l in rec.get("layers", [])] == held
+           and (out / BP / "final.png").read_bytes() == (out / BP / "v005/image.png").read_bytes()
+           and (out / BP / "final.md").read_text() == scene_state.final_md(rec)
+           and files == ["01-planet.png", "02-asteroids.png", "03-ships.png"]
+           and all((out / BP / "final-layers" / f"{i:02d}-{l}.png").read_bytes()
+                   == (out / BP / "layers" / l / v / "image.png").read_bytes()
+                   for i, (l, v) in enumerate(held, start=1))
+           and "approved and promoted to final.png" in receipt(f"{BP}/v005").get("Status", "")
+           and "approved in Combined Image v005" in
+               receipt(f"{BP}/layers/asteroids/v002").get("Status", ""), f"{msg3}\n{rec}")
+    finals = {p: p.read_bytes() for p in [out / BP / "final.png", out / BP / "final.md",
+                                         *(out / BP / "final-layers").iterdir()]}
+
+    fake_version(BP, "ships", ships2_png, SE)
+    code, msg = approve(f"{BP}/layers/ships/v003", "--approval", "Smaller ships, approved.",
+                        "--based-on", "12", "--replace")
+    report("approving a new ships version after the scene approval leaves the approved image "
+           "and Layer files unchanged, and says so",
+           code == 0 and "the scene's approved image, v005, holds ships v001" in msg
+           and {p: p.read_bytes() for p in finals if p.exists()} == finals
+           and sorted(p.name for p in (out / BP / "final-layers").iterdir()) == files, msg)
+
+    shutil.rmtree(out / BP / "final-layers")
+    st = status_of(BP)
+    code, msg = approve(f"{BP}/v005")
+    report("missing Layer files show in status; promote.py completes them from the record "
+           "without writing another", "final-layers/ is missing: run promote.py on v005" in st
+           and code == 0 and "completing the copies" in msg and journal(BP)[-1] == "013.json"
+           and {p: p.read_bytes() for p in finals if p.exists()} == finals
+           and "integrity problems: none" in status_of(BP), st + msg)
+    code, msg = approve(f"{BP}/v005", "--approval", "Again.", "--based-on", "13")
+    report("once the copies match, approving that Combined Image again is a new approval, "
+           "naming what it replaces", code != 0 and "the approved image v005 (journal/012.json)"
+           in msg and "Layer ships's Approved Layer Version v003 (journal/013.json" in msg, msg)
+    code, msg = approve(f"{BP}/v005", "--based-on", "13")
+    report("a new Combined Image approval without --approval refused",
+           code != 0 and "--approval is required" in msg, msg)
+
+    fake_version(BP, "planet", blues[3], PE)
+    layers_cmd("keep", BP, "--layer", "planet", "--version", "v004", "--words", "Keep v4.",
+               "--based-on", "13")
+    st = status_of(BP)
+    report("status reports approvals with their words, keeps, Default Versions, the "
+           "approvable Combined Images and the approved one with its Layer files",
+           "      approved in journal/012.json, " in st
+           and "      approved in journal/013.json, " in st and ": Smaller ships, approved." in st
+           and "      kept: v004 in journal/014.json, " in st
+           and "      Default Version: v004 (kept); Approved Layer Version: v003" in st
+           and "      Default Version: v003 (its Approved Layer Version); Approved Layer "
+               "Version: v003" in st
+           and "  can be approved now: " in st
+           and "  approved image: v005, approved in journal/012.json" in st
+           and "    final-layers/03-ships.png: ships v001" in st, st)
+
+    # check-delete: approved and used versions never; others under today's rule
+    for name, rel, ok, expect in [
+        ("check-delete refuses a version approved on its own and in no Combined Image",
+         f"{BP}/layers/ships/v003", False, "it is Layer ships's Approved Layer Version"),
+        ("check-delete refuses a version a Combined Image uses, naming each",
+         f"{BP}/layers/asteroids/v001", False, "Combined Images v001 name it"),
+        ("check-delete refuses an approved version a Combined Image uses, naming both",
+         f"{BP}/layers/planet/v003", False, "Approved Layer Version (journal/012.json"),
+        ("check-delete refuses a folder that isn't a record folder", f"{BP}/journal", False,
+         "is not one of scene bluer's"),
+        ("check-delete allows an unused, unapproved version under today's rule",
+         f"{BP}/layers/ships/v002", True, "may be deleted under today's rule"),
+        ("check-delete says deleting a kept version ends its keep",
+         f"{BP}/layers/planet/v004", True, "deleting it ends its keep (journal/014.json)"),
+        ("check-delete notes the scene's approved Combined Image",
+         f"{BP}/v005", True, "it is the scene's approved image (journal/012.json)"),
+    ]:
+        before = sorted(tmp.rglob("*"))
+        code, msg = layers_cmd("check-delete", BP, str(out / rel))
+        report(name, (code == 0) == ok and expect in msg and "Traceback" not in msg
+               and sorted(tmp.rglob("*")) == before, msg)
+    code, msg = layers_cmd("check-delete", BP, str(out / BP / "layers/ships/v099"))
+    report("check-delete refuses a folder that doesn't exist",
+           code != 0 and "doesn't exist" in msg and "Traceback" not in msg, msg)
+    (out / BP / "final-layers/.DS_Store").write_text("finder")
+    shutil.rmtree(out / BP / "layers/planet/v004")   # by hand, with no deletion log
+    st = status_of(BP)
+    report("status ignores a dotfile in final-layers/ and names a kept folder that's gone",
+           "final-layers/.DS_Store" not in st and "journal/014.json (keep) names planet v004, "
+           "whose folder is gone" in st, st)
+    code, msg = layers_cmd("check-delete", "single-gen", str(out / "single-gen/v001"))
+    report("check-delete refuses a Single-Layer Scene", code != 0 and "not a Layered Scene"
+           in msg, msg)
+
+    # each refusal by name, on a scene whose plan changes under its Combined Images
+    C = "cond"
+    plan(C, *LF, "--layer", "a=Part a", "--layer", "b=Part b", "--layer", "c=Part c", *YES,
+         "--based-on", "0")
+    for lid, x in (("a", 40), ("b", 90), ("c", 140)):
+        fake_version(C, lid, img(f"cond-{lid}.png", "xc:none", *disc("#aa3344", x, 54, 12)),
+                     f"Part {lid}")
+    fake_version(C, "a", square_png, "Part a")   # a v002, off the Frame's aspect ratio
+    layers_cmd("combine", C)                      # v001: a, b, c
+    layers_cmd("combine", C, "--only", "a,b")     # v002: c missing
+    (out / C / "drafts/v001").mkdir(parents=True)
+    shutil.copyfile(draft_png, out / C / "drafts/v001/image.png")
+    (out / C / "drafts/v001/generation.md").write_text(
+        f"# cond draft v001\n\nKind: Draft\nmd5: {gen.md5(draft_png)}\n")
+    b1 = out / C / "layers/b/v001/image.png"
+    saved_b1 = b1.read_bytes()
+
+    def refusals(rows) -> None:
+        for name, args, expect, prep in rows:
+            if prep:
+                prep()
+            before = sorted(tmp.rglob("*"))
+            code, msg = (approve(*args[1:]) if args[0] == "promote"
+                         else layers_cmd(args[0], C, *args[1:]))
+            report(name, code != 0 and expect in msg and "Traceback" not in msg
+                   and sorted(tmp.rglob("*")) == before,
+                   f"expected {expect!r} and nothing written, exit {code}:\n{msg}")
+            b1.write_bytes(saved_b1)
+
+    AP = ["--approval", "Yes."]
+    refusals([
+        ("a Draft approval refused", ["promote", f"{C}/drafts/v001", *AP, "--based-on", "1"],
+         "is a Draft", None),
+        ("a Layer Version approval without --approval refused",
+         ["promote", f"{C}/layers/a/v001", "--based-on", "1"], "--approval is required", None),
+        ("a Layer Version approval without --based-on refused",
+         ["promote", f"{C}/layers/a/v001", *AP], "--based-on is required", None),
+        ("a stale --based-on on promote.py refused",
+         ["promote", f"{C}/layers/a/v001", *AP, "--based-on", "0"],
+         "show the User its new state", None),
+        ("a Layer Version approval at the wrong aspect ratio refused, naming it",
+         ["promote", f"{C}/layers/a/v002", *AP, "--based-on", "1"],
+         "Layer a's v002 can't be approved: 150x150 doesn't match the Frame's aspect ratio",
+         None),
+        ("a Combined Image missing a Layer refused, naming it",
+         ["promote", f"{C}/v002", *AP, "--based-on", "1"],
+         "c: missing from the Combined Image", None),
+        ("a Combined Image holding an altered Layer Version refused, naming the file",
+         ["promote", f"{C}/v001", *AP, "--based-on", "1"],
+         "output:cond/layers/b/v001/image.png is altered",
+         lambda: magick(str(b1), "-fill", "#ffffff", "-draw", "point 1,1", str(b1))),
+        ("a keep of a version that doesn't count refused",
+         ["keep", "--layer", "a", "--version", "v002", "--words", "Keep.", "--based-on", "1"],
+         "Layer a's v002 doesn't count (150x150 doesn't match", None),
+        ("a keep of a version that doesn't exist refused",
+         ["keep", "--layer", "a", "--version", "v009", "--words", "Keep.", "--based-on", "1"],
+         "has no version v009", None),
+        ("a keep of a Layer not in the plan refused",
+         ["keep", "--layer", "moon", "--version", "v001", "--words", "Keep.", "--based-on", "1"],
+         "is not in the current Layer Plan", None),
+        ("a keep without --based-on refused",
+         ["keep", "--layer", "a", "--version", "v001", "--words", "Keep."],
+         "--based-on is required", None),
+        ("a stale --based-on on keep refused",
+         ["keep", "--layer", "a", "--version", "v001", "--words", "Keep.", "--based-on", "0"],
+         "show the User its new state", None),
+        ("a keep of an altered version refused, naming the file",
+         ["keep", "--layer", "b", "--version", "v001", "--words", "Keep.", "--based-on", "1"],
+         "output:cond/layers/b/v001/image.png is altered",
+         lambda: magick(str(b1), "-fill", "#ffffff", "-draw", "point 1,1", str(b1))),
+    ])
+    layers_cmd("keep", C, "--layer", "b", "--version", "v001", "--words", "Keep b.",
+               "--based-on", "1")
+    plan(C, *LF, "--layer", "b=@1", "--layer", "a=@1", "--layer", "c=@1", *YES,
+         "--based-on", "2")                         # 3: reordered
+    plan(C, *LF, "--layer", "b=@1", "--layer", "a=@1", *YES, "--based-on", "3")   # 4: no c
+    layers_cmd("combine", C)                        # v003: b, a
+    plan(C, *LF, "--layer", "b=@1", "--layer", "a=Part a, changed", *YES,
+         "--based-on", "4")                         # 5: a's Layer Entry changed
+    refusals([
+        ("a keep already in force recorded again refused",
+         ["keep", "--layer", "b", "--version", "v001", "--words", "Keep.", "--based-on", "5"],
+         "already kept", None),
+        ("a Combined Image in an old order refused, naming the Layers",
+         ["promote", f"{C}/v001", *AP, "--based-on", "5"], "a: in an old order", None),
+        ("a Combined Image holding a removed Layer refused, naming it",
+         ["promote", f"{C}/v001", *AP, "--based-on", "5"], "c: removed", None),
+        ("a Combined Image made under a different Layer Entry refused, naming the Layer",
+         ["promote", f"{C}/v003", *AP, "--based-on", "5"],
+         "a: v001 is made under a different Layer Entry", None),
+        ("a removed Layer's version approval refused", ["promote", f"{C}/layers/c/v001", *AP,
+                                                         "--based-on", "5"],
+         "its Layer is removed", None),
+        ("a Layer Version made under another Layer Entry refused",
+         ["promote", f"{C}/layers/a/v001", *AP, "--based-on", "5"],
+         "made under another Layer Entry", None),
+    ])
+
+    # a version replaced along with its receipt's md5 is still caught by the journal's md5
+    b1_md = out / C / "layers/b/v001/generation.md"
+    saved_md = b1_md.read_text()
+    magick("-size", "192x108", "xc:none", *disc("#33aa44", 60, 54, 12), str(b1))
+    b1_md.write_text(re.sub(r"^md5: .*$", f"md5: {gen.md5(b1)}", saved_md, flags=re.M))
+    before = sorted(tmp.rglob("*"))
+    code, msg = layers_cmd("combine", C)
+    st = status_of(C)
+    report("a kept version that isn't the md5 its keep record holds is refused by combine "
+           "and named by status", code != 0 and "that journal/002.json records" in msg
+           and "layers/b/v001/image.png is not the md5" in st and "Traceback" not in msg
+           and sorted(tmp.rglob("*")) == before, msg + st)
+    b1.write_bytes(saved_b1)
+    b1_md.write_text(saved_md)
+
+    # a two-Layer and a six-Layer scene each approved; folders named layers/ or drafts/ in a
+    # scene that isn't layered promote as today
+    for slug, n in (("duo", 2), ("six", 6)):
+        code, msg = approve(f"{slug}/v001", "--approval", "Approved.", "--based-on", "1")
+        report(f"a {n}-Layer scene's Combined Image is approved, with {n} Layer files",
+               code == 0 and len(list((out / slug / "final-layers").iterdir())) == n
+               and record(slug, 2).get("kind") == "scene-approval", msg)
+    (out / "duo/final.png").chmod(0o444)
+    before = sorted(tmp.rglob("*"))
+    code, msg = approve("duo/v001", "--approval", "Again.", "--based-on", "2", "--replace")
+    report("a scene approval whose final.png can't be replaced is refused before recording",
+           code != 0 and "can't be replaced" in msg and "Traceback" not in msg
+           and journal("duo") == ["001.json", "002.json"] and sorted(tmp.rglob("*")) == before,
+           msg)
+    (out / "duo/final.png").chmod(0o644)
+    (out / "drafts/v001").mkdir(parents=True)
+    magick("-size", "64x64", "xc:#445566", str(out / "drafts/v001/image.png"))
+    (out / "drafts/v001/generation.md").write_text("# drafts v001\n\nStatus: awaiting user "
+                                                   "evaluation\n")
+    code, msg = approve("drafts/v001", "--approval", "Yes.")
+    report("a scene named drafts, not layered, promotes as today",
+           code == 0 and (out / "drafts/final.png").exists(), msg)
+
+    explore_scene_states(tmp, report)
+
     print(f"\n  {checks - failures}/{checks} checks passed")
     return 1 if failures else 0
+
+
+# --------------------------------------------- SR-15.4: the bounded exhaustive test
+
+# Three Layers: a has two Layer Entry texts, and is the one the plan changes remove,
+# put back, change and change back; b and c have one each. Each Layer holds at most
+# one version at the Frame's aspect ratio and one off it per Layer Entry, except b,
+# which may hold two at it, so a counting version can differ from the Default Version.
+X_ENTRIES = {"a": ("The moon", "The moon and the comet"), "b": ("The ships",),
+             "c": ("The stars",)}
+X_AT = {"a": 1, "b": 2, "c": 1}
+X_IDS = ("a", "b", "c")
+X_FRAME = {"width": 192, "height": 108}
+X_SIZE = {True: (192, 108), False: (150, 150)}
+X_TARGETS = (
+    "Default Version: kept", "Default Version: approved", "Default Version: latest",
+    "Default Version: none", "an approval of a Layer with a keep in force",
+    "a removed Layer with an approval and a keep put back with its approved entry",
+    "a removed Layer with an approval and a keep put back with another entry",
+    "candidate: each Layer at its Default Version",
+    "candidate: one Layer at a counting non-default version",
+    "candidate: one Layer missing", "candidate: an old order",
+    "candidate: a removed Layer", "candidate: a version that doesn't count",
+    "a keep in force on a version older than the Layer's latest",
+    "a new version while another Layer's Default Version is kept",
+    "a new version while another Layer's Default Version is approved",
+    "a new version while another Layer's Default Version is its latest")
+
+
+def explore_scene_states(tmp: Path, report) -> None:
+    """SR-15.4. Drives the real scene_state over every state reachable from an empty
+    scene, each distinct state once, and checks it against a small independent model
+    of SR-8: after every event, SR-16.1 to SR-16.5; for every keep and approval tried,
+    that the real check accepts exactly what the model allows. Then, from each state
+    where a reachability target is first reached, runs every interleaving of two
+    writers' read, check and publish steps on a real journal folder (SR-16.6).
+
+    A model state is (order, ever, versions, approved, kept, scene approved): order is
+    ((Layer ID, Layer Entry), ...) bottom first; versions[i] is ((entry, at Frame
+    ratio), ...) for X_IDS[i], numbered from 1; approved and kept hold version numbers
+    (0 for none). Two states are the same when they agree on what SR-8 reads."""
+    started, problems = time.monotonic(), []
+    reached: dict[str, tuple] = {}
+
+    def bad(what: str) -> None:
+        if len(problems) < 8:
+            problems.append(what)
+
+    @functools.cache
+    def entries(order):
+        return dict(order)
+
+    def entry(m, lid):
+        return entries(m[0]).get(lid)
+
+    def counts(m, i, n):
+        e, fit = m[2][i][n - 1]
+        return fit and e == entry(m, X_IDS[i])
+
+    def default(m, i):
+        if entry(m, X_IDS[i]) is None:
+            return 0
+        if m[4][i]:
+            return m[4][i]
+        if m[3][i] and counts(m, i, m[3][i]):
+            return m[3][i]
+        return max((n for n in range(1, len(m[2][i]) + 1) if counts(m, i, n)), default=0)
+
+    @functools.cache
+    def layer_key(vs, approved, kept):
+        """What SR-8 reads of one Layer: its versions at the Frame's aspect ratio in
+        order, the entries of those off it (which never count), and which of the
+        former are approved and kept."""
+        at = [n for n in range(1, len(vs) + 1) if vs[n - 1][1]]
+        return (tuple(vs[n - 1][0] for n in at), frozenset(e for e, fit in vs if not fit),
+                at.index(approved) if approved else None, at.index(kept) if kept else None)
+
+    def key(m):
+        return m[0], m[1], tuple(layer_key(m[2][i], m[3][i], m[4][i]) for i in range(3))
+
+    def put(t, i, value):
+        return t[:i] + (value,) + t[i + 1:]
+
+    def record(records, kind, **fields):
+        return records + ({"number": len(records) + 1, "kind": kind, "date": "2026-01-01",
+                           "words": f"{kind} {len(records) + 1}", **fields},)
+
+    def plan_record(records, order):
+        return record(records, "plan", layered=True, frame=X_FRAME,
+                      layers=[{"id": l, "entry": e} for l, e in order])
+
+    def named(lid, n):
+        return {"layer": lid, "version": f"v{n:03d}", "md5": "0" * 32}
+
+    def derive(records, raw):
+        view = scene_state.journal_view(records)
+        if view["plan"] is None:
+            return view, None, None
+        assessed = {lid: scene_state.assess(raw[i], lid, view["plan"])
+                    for i, lid in enumerate(X_IDS)}
+        return view, assessed, {lid: scene_state.layer_state(view, lid, assessed[lid])
+                                for lid in X_IDS}
+
+    num = lambda v: v["number"] if v else 0
+
+    def agrees(m, assessed, real, where):
+        """The real implementation matches the model, and SR-16.1 holds."""
+        for i, lid in enumerate(X_IDS):
+            st = real[lid]
+            if [v["counts"] for v in assessed[lid]] != [counts(m, i, n) for n in
+                                                       range(1, len(m[2][i]) + 1)]:
+                bad(f"{where}: Layer {lid}'s counting versions differ from the model")
+            got = (num(st["default"]), num(st["approved"]), num(st["kept"]))
+            if got != (default(m, i), m[3][i], m[4][i]):
+                bad(f"{where}: Layer {lid} (default, approved, kept) is {got}, the model "
+                    f"says {(default(m, i), m[3][i], m[4][i])}")
+            if st["default"] is not None and not st["default"]["counts"]:
+                bad(f"{where}: SR-16.1: Layer {lid}'s Default Version doesn't count")
+
+    def candidates(m):
+        """The six kinds of Combined Image approval SR-15.4 names, as stacks."""
+        order = [l for l, _ in m[0]]
+        base = [(l, default(m, X_IDS.index(l))) for l in order]
+        if not order or any(n == 0 for _, n in base):
+            return
+        yield "candidate: each Layer at its Default Version", base
+        for k, (l, d) in enumerate(base):
+            i, vs = X_IDS.index(l), m[2][X_IDS.index(l)]
+            for n in range(1, len(vs) + 1):
+                if n != d and counts(m, i, n):
+                    yield "candidate: one Layer at a counting non-default version", put(
+                        tuple(base), k, (l, n))
+                elif not counts(m, i, n):
+                    yield "candidate: a version that doesn't count", put(tuple(base), k, (l, n))
+            if len(base) > 1:
+                yield "candidate: one Layer missing", base[:k] + base[k + 1:]
+        if len(base) > 1:
+            yield "candidate: an old order", base[::-1]
+        for l in m[1]:
+            i = X_IDS.index(l)
+            if l not in order and m[2][i]:
+                yield "candidate: a removed Layer", base + [(l, 1)]
+
+    def plan_changes(m):
+        order, ids = m[0], [l for l, _ in m[0]]
+        if not order:
+            yield "plan", ((X_IDS[0], X_ENTRIES["a"][0]), ("b", "The ships"), ("c", "The stars"))
+            yield "plan", (("b", "The ships"), ("c", "The stars"))
+            return
+        if "a" in ids:
+            if len(ids) == 3:
+                yield "remove", tuple(x for x in order if x[0] != "a")
+            other = next(e for e in X_ENTRIES["a"] if e != entry(m, "a"))
+            yield "change", tuple((l, other if l == "a" else e) for l, e in order)
+        else:
+            for e in X_ENTRIES["a"]:
+                for pos in range(len(order) + 1):
+                    yield ("put back" if "a" in m[1] else "add"), \
+                        order[:pos] + (("a", e),) + order[pos:]
+        for p in itertools.permutations(order):
+            if p != order:
+                yield "reorder", p
+
+    def first(target, state):
+        if target not in reached:
+            reached[target] = state
+
+    empty = ((), frozenset(), ((), (), ()), (0, 0, 0), (0, 0, 0), False)
+    seen = {key(empty)}
+    queue = collections.deque([(empty, (), ((), (), ()))])
+    states = events = 0
+    while queue:
+        m, records, raw = queue.popleft()
+        states += 1
+        view, assessed, real = derive(records, raw)
+        if real is not None:
+            agrees(m, assessed, real, f"state {states}")
+            for lid in (l for l, _ in m[0]):
+                first(f"Default Version: {real[lid]['default_why'] or 'none'}", (m, records, raw))
+                st = real[lid]
+                if st["kept"] and st["latest"] and st["kept"]["number"] < st["latest"]["number"]:
+                    first("a keep in force on a version older than the Layer's latest",
+                          (m, records, raw))
+        children = []
+        present = [l for l, _ in m[0]]
+        # new versions, at and off the Frame's aspect ratio
+        for lid in present:
+            i, e = X_IDS.index(lid), entry(m, lid)
+            vs = m[2][i]
+            for fit in (True, False):
+                if sum(1 for x in vs if x == (e, fit)) >= (X_AT[lid] if fit else 1):
+                    continue
+                n = len(vs) + 1
+                raw2 = put(raw, i, raw[i] + ({"number": n, "name": f"v{n:03d}", "layer": lid,
+                                               "entry": e, "size": X_SIZE[fit],
+                                               "deleted": False},))
+                child = (m[0], m[1], put(m[2], i, vs + ((e, fit),)), m[3], m[4], m[5])
+                for other in present:
+                    if other == lid:
+                        continue
+                    before = real[other]
+                    why = before["default_why"]
+                    if why:
+                        first(f"a new version while another Layer's Default Version is "
+                              + {"kept": "kept", "approved": "approved", "latest": "its latest"}[why],
+                              (child, records, raw2))
+                    j = X_IDS.index(other)
+                    after = scene_state.layer_state(
+                        view, other, scene_state.assess(raw2[j], other, view["plan"]))
+                    if num(after["default"]) != num(before["default"]):
+                        bad(f"SR-16.5: a new {lid} version changed {other}'s Default Version")
+                children.append((child, records, raw2))
+        # keeps and Layer approvals of every recorded version, counting or not
+        for i, lid in enumerate(X_IDS):
+            for n in range(1, len(m[2][i]) + 1):
+                ok, name = lid in present and counts(m, i, n), f"v{n:03d}"
+                vs = assessed[lid] if assessed else []
+                for kind in ("keep", "layer-approval"):
+                    events += 1
+                    try:
+                        if kind == "keep":
+                            scene_state.check_keep(view, lid, vs, name)
+                        else:
+                            scene_state.check_layer_approval(view, lid, vs, name, True)
+                        took = True
+                    except scene_state.Fail:
+                        took = False
+                    if took != ok:
+                        bad(f"state {states}: {kind} of {lid} {name} "
+                            + ("accepted" if took else "refused") + " against the model")
+                    if not ok:
+                        continue
+                    if kind == "keep":
+                        child = (m[0], m[1], m[2], m[3], put(m[4], i, n), m[5])
+                    else:
+                        if real[lid]["keep"]:
+                            first("an approval of a Layer with a keep in force",
+                                  (m, records, raw))
+                        try:
+                            scene_state.check_layer_approval(view, lid, vs, name, False)
+                            alone = True
+                        except scene_state.Fail:
+                            alone = False
+                        if alone != (m[3][i] in (0, n)):
+                            bad(f"state {states}: approving {lid} {name} without --replace "
+                                + ("accepted" if alone else "refused") + " against the model")
+                        child = (m[0], m[1], m[2], put(m[3], i, n), put(m[4], i, 0), m[5])
+                    recs = record(records, kind, **named(lid, n))
+                    if kind == "layer-approval" and scene_state.journal_view(recs)["keep"].get(lid):
+                        bad(f"SR-16.2: a keep of {lid} is in force after its approval")
+                    children.append((child, recs, raw))
+        # Combined Image approvals of the six kinds of candidate (SR-16.4)
+        for target, stack in candidates(m):
+            events += 1
+            first(target, (m, records, raw))
+            order = [l for l, _ in m[0]]
+            ok = [l for l, _ in stack] == order and all(
+                counts(m, X_IDS.index(l), n) for l, n in stack)
+            alone = ok and not m[5] and all(m[3][X_IDS.index(l)] in (0, n) for l, n in stack)
+            for replace, want in ((True, ok), (False, alone)):
+                try:
+                    scene_state.check_scene_approval(
+                        view, assessed, [{"layer": l, "version": f"v{n:03d}"} for l, n in stack],
+                        replace)
+                    took = True
+                except scene_state.Fail:
+                    took = False
+                if took != want:
+                    bad(f"SR-16.4: state {states}: {target} {stack} "
+                        + ("accepted" if took else "refused") + f" with replace={replace}")
+            if not ok:
+                continue
+            if any(real[l]["keep"] for l, _ in stack):
+                first("an approval of a Layer with a keep in force", (m, records, raw))
+            approved, kept = m[3], m[4]
+            for l, n in stack:
+                approved, kept = put(approved, X_IDS.index(l), n), put(kept, X_IDS.index(l), 0)
+            recs = record(records, "scene-approval", combined="output:x/v001", md5="0" * 32,
+                          layers=[named(l, n) for l, n in stack])
+            if any(scene_state.journal_view(recs)["keep"].get(l) for l, _ in stack):
+                bad("SR-16.2: a keep is in force after a scene approval of its Layer")
+            children.append(((m[0], m[1], m[2], approved, kept, True), recs, raw))
+        # Layer Plan changes
+        for change, order in plan_changes(m):
+            events += 1
+            kept = tuple(0 if m[4][i] and entry(m, lid) != dict(order).get(lid) else m[4][i]
+                         for i, lid in enumerate(X_IDS))
+            child = (order, m[1] | {l for l, _ in order}, m[2], m[3], kept, m[5])
+            if key(child) not in seen:   # the real plan check, on each first visit
+                proposal = {"layered": True, "frame": X_FRAME,
+                            "layers": [{"id": l, "entry": e} for l, e in order]}
+                try:
+                    scene_state.check_plan(list(records), proposal, any(raw))
+                except scene_state.Fail as e:
+                    bad(f"state {states}: a valid plan change ({change}) refused: {e}")
+                    continue
+            recs = plan_record(records, order)
+            if any(m[4]):
+                # a plan change can end keeps; the state it reaches may have been seen
+                # by a path without them, so check this path's keeps here (SR-8.4)
+                now = scene_state.journal_view(recs)["keep"]
+                if tuple(int(now[l]["version"][1:]) if l in now else 0 for l in X_IDS) != kept:
+                    bad(f"SR-8.4: state {states}: after a plan change ({change}) the keeps in "
+                        f"force are {sorted(now)}, the model says {kept}")
+            if change == "remove" and m[3][0] and m[4][0]:
+                # a removed Layer holding an approval and a keep, put back both ways
+                for e in X_ENTRIES["a"]:
+                    back = plan_record(recs, order + (("a", e),))
+                    same = e == m[2][0][m[3][0] - 1][0]
+                    first("a removed Layer with an approval and a keep put back with "
+                          + ("its approved entry" if same else "another entry"),
+                          (child, recs, raw))
+                    check_put_back(back, raw, e, same, bad)
+            if change == "put back":
+                e = dict(order)["a"]
+                check_put_back(recs, raw, e, e == m[2][0][m[3][0] - 1][0] if m[3][0] else None,
+                               bad)
+            children.append((child, recs, raw))
+        for child in children:
+            k = key(child[0])
+            if k not in seen:
+                seen.add(k)
+                queue.append(child)
+    elapsed = time.monotonic() - started
+    report(f"SR-15.4: {states} distinct states and {events} tried decisions explored in "
+           f"{elapsed:.1f} s; the real scene_state agrees with the model, and SR-16.1 to "
+           "SR-16.5 hold after every event", not problems, "\n".join(problems))
+    missed = [t for t in X_TARGETS if t not in reached]
+    report(f"SR-15.4: all {len(X_TARGETS)} reachability targets reached", not missed,
+           "missed: " + "; ".join(missed))
+    interleave_writers(tmp, reached, report)
+
+
+def check_put_back(records, raw, put_entry: str, approved_same: bool | None, bad) -> None:
+    """SR-16.3 on a plan record that puts Layer a back: its Approved Layer Version
+    counts again exactly when the entry it is put back with says the same as the one
+    that version was made under, and no keep recorded before the removal is in force."""
+    view = scene_state.journal_view(records)
+    st = scene_state.layer_state(view, "a", scene_state.assess(raw[0], "a", view["plan"]))
+    if st["keep"] is not None:
+        bad("SR-16.3: a keep recorded before Layer a's removal is in force after it is put back")
+    if approved_same is not None and (st["approved"] is not None
+                                      and st["approved"]["counts"]) != approved_same:
+        bad(f"SR-16.3: Layer a put back with {put_entry!r}: its Approved Layer Version "
+            + ("doesn't count" if approved_same else "counts"))
+
+
+def interleave_writers(tmp: Path, reached: dict, report) -> None:
+    """SR-16.6: from each state where a target was first reached, for every pair of
+    record kinds (two of one kind included), every interleaving of two writers' read,
+    check and publish steps on a real journal folder. Both writers decided on the
+    starting state. Each published record must pass its check against the journal as
+    it stood just before it, and a writer whose journal moved past its based-on number
+    must publish nothing."""
+    started, problems, runs = time.monotonic(), [], 0
+    kinds = ("plan", "keep", "layer-approval", "scene-approval")
+    steps = [p for p in itertools.permutations([0, 0, 0, 1, 1, 1])]
+    orders = sorted(set(steps))   # the 20 interleavings of two three-step writers
+    scene = tmp / "sr-16.6"
+
+    def decide(kind, view, assessed):
+        """A decision of this kind the journal allows, or None."""
+        plan = view["plan"]
+        ids = [l["id"] for l in plan["layers"]]
+        if kind == "plan":
+            layers = plan["layers"][1::-1] + plan["layers"][2:]
+            return {"layered": True, "frame": X_FRAME, "layers": layers}
+        counting = [(lid, v) for lid in ids for v in assessed[lid] if v["counts"]]
+        if kind in ("keep", "layer-approval"):
+            return ({"layer": counting[0][0], "version": counting[0][1]["name"]}
+                    if counting else None)
+        stack = []
+        for lid in ids:
+            d = scene_state.layer_state(view, lid, assessed[lid])["default"]
+            if d is None:
+                return None
+            stack.append({"layer": lid, "version": d["name"]})
+        return stack
+
+    def check(kind, decision, records):
+        view = scene_state.journal_view(records)
+        assessed = {lid: scene_state.assess(raws[lid], lid, view["plan"]) for lid in X_IDS}
+        if kind == "plan":
+            scene_state.check_plan(records, decision, True)
+        elif kind == "keep":
+            scene_state.check_keep(view, decision["layer"], assessed[decision["layer"]],
+                                   decision["version"])
+        elif kind == "layer-approval":
+            scene_state.check_layer_approval(view, decision["layer"],
+                                             assessed[decision["layer"]], decision["version"],
+                                             True)
+        else:
+            scene_state.check_scene_approval(view, assessed, decision, True)
+
+    def as_record(kind, decision, n):
+        fields = ({**decision} if kind == "plan" else
+                  {"combined": "output:x/v001", "md5": "0" * 32,
+                   "layers": [{**s, "md5": "0" * 32} for s in decision]}
+                  if kind == "scene-approval" else {**decision, "md5": "0" * 32})
+        return {"number": n, "kind": kind, "date": "2026-01-01", "words": f"writer {kind}",
+                **fields}
+
+    for target, (m, records, raw) in reached.items():
+        if not records:
+            continue
+        raws = dict(zip(X_IDS, raw))
+        base = len(records)
+        shutil.rmtree(scene, ignore_errors=True)
+        (scene / "journal").mkdir(parents=True)
+        for r in records:
+            scene_state.publish(scene, dict(r))
+        view = scene_state.journal_view(list(records))
+        assessed = {lid: scene_state.assess(raws[lid], lid, view["plan"]) for lid in X_IDS}
+        decisions = {k: decide(k, view, assessed) for k in kinds}
+        for a, b in itertools.combinations_with_replacement(kinds, 2):
+            if decisions[a] is None or decisions[b] is None:
+                continue
+            for order in orders:
+                runs += 1
+                writers = [{"kind": a, "based_on": base, "step": 0, "done": None},
+                           {"kind": b, "based_on": base, "step": 0, "done": None}]
+                for w in order:
+                    wr = writers[w]
+                    if wr["done"] is not None:
+                        continue
+                    try:
+                        if wr["step"] == 0:
+                            wr["records"] = scene_state.read_journal(scene)
+                        elif wr["step"] == 1:
+                            scene_state.check_based_on(wr["records"], wr["based_on"])
+                            check(wr["kind"], decisions[wr["kind"]], wr["records"])
+                        else:
+                            n = scene_state.latest(wr["records"]) + 1
+                            scene_state.publish(scene, as_record(wr["kind"],
+                                                                 decisions[wr["kind"]], n))
+                            wr["done"] = n
+                        wr["step"] += 1
+                    except scene_state.Fail:
+                        wr["done"] = 0
+                now = scene_state.read_journal(scene)
+                for w, wr in enumerate(writers):
+                    if wr["done"]:
+                        before = now[:wr["done"] - 1]
+                        if scene_state.latest(before) != wr["based_on"]:
+                            problems.append(f"{target}: writer {w + 1} ({wr['kind']}) "
+                                            "published past its based-on number")
+                        try:
+                            check(wr["kind"], decisions[wr["kind"]], before)
+                        except scene_state.Fail as e:
+                            problems.append(f"{target}: writer {w + 1}'s {wr['kind']} fails "
+                                            f"its check against the journal before it: {e}")
+                if len(now) != base + 1 or sum(1 for wr in writers if wr["done"]) != 1:
+                    problems.append(f"{target}: {a} and {b} in order {order} left "
+                                    f"{len(now) - base} records")
+                leftovers = [p.name for p in (scene / "journal").iterdir()
+                             if not scene_state.RECORD.fullmatch(p.name)]
+                if leftovers:
+                    problems.append(f"{target}: temporary files left: {leftovers}")
+                for p in (scene / "journal").iterdir():
+                    if (mm := scene_state.RECORD.fullmatch(p.name)) and int(mm.group(1)) > base:
+                        p.unlink()
+    shutil.rmtree(scene, ignore_errors=True)
+    report(f"SR-16.6: {runs} two-writer interleavings from {len(reached)} target states, in "
+           f"{time.monotonic() - started:.1f} s: every published record passes its check "
+           "against the journal before it, and a moved journal publishes nothing",
+           runs > 0 and not problems, "\n".join(problems[:8]))
 
 
 if __name__ == "__main__":
