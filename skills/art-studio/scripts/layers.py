@@ -933,9 +933,10 @@ def donor(scene: Path, records: list[dict], plan: dict, spec: str) -> dict:
 
 
 def changed_outside(start: Path, image: Path, mask: Path) -> int:
-    """How many pixels outside the mask (where it is black) differ between the two
-    images, compared premultiplied: colour times alpha, and alpha. An image without an
-    alpha channel counts as opaque."""
+    """How many pixels outside the mask differ between the two images, compared
+    premultiplied: colour times alpha, and alpha. An image without an alpha channel
+    counts as opaque. A mask pixel at or below 2% (5/255) counts as outside, so a noisy
+    near-black mask doesn't hide a change."""
     prem = lambda p: ["(", str(p), "-alpha", "set", "-background", "black", "-alpha",
                       "remove", "-alpha", "off", ")", "(", str(p), "-alpha", "set",
                       "-alpha", "extract", ")"]
@@ -944,7 +945,7 @@ def changed_outside(start: Path, image: Path, mask: Path) -> int:
                      "-separate", "-evaluate-sequence", "max", ")",
                      "(", "-clone", "1", "-clone", "3", "-compose", "difference", "-composite",
                      ")", "-delete", "0-3", "-evaluate-sequence", "max", "-threshold", "0",
-                     "(", mask, "-alpha", "off", "-colorspace", "Gray", "-threshold", "0",
+                     "(", mask, "-alpha", "off", "-colorspace", "Gray", "-threshold", "2%",
                      "-negate", ")", "-compose", "multiply", "-composite",
                      "-precision", "15", "-format", "%[fx:mean*w*h]", "info:")
     return round(float(got))

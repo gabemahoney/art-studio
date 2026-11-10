@@ -2078,10 +2078,19 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
            "rectangle 180,90 191,107", str(odd))
     odd_mask = img("odd-mask.png", "xc:black", "-fill", "white", "-draw", "rectangle 0,0 9,9",
                    "-alpha", "off")
+    # noise at 5/255 counts as outside the mask (decision 14); 6/255 counts as inside
+    noisy_mask = img("noisy-mask.png", "xc:gray(5)", "-fill", "white", "-draw",
+                     "rectangle 0,0 9,9", "-alpha", "off", "-depth", "8")
+    edge_mask = img("edge-mask.png", "xc:black", "-fill", "white", "-draw", "rectangle 0,0 9,9",
+                    "-fill", "gray(6)", "-draw", "rectangle 180,90 191,107", "-alpha", "off",
+                    "-depth", "8")
     fake_version(R, "ships", ships_png, SE, style="v2")       # ships v004, another style
     for name, args, expect in [
         ("record warns, with the count, when pixels outside the mask changed",
          rec_args("--mask", str(odd_mask), image=odd),
+         "216 pixels differ from the starting version outside the mask"),
+        ("record counts a noisy mask's pixels at or below 5/255 as outside it",
+         rec_args("--mask", str(noisy_mask), image=odd),
          "216 pixels differ from the starting version outside the mask"),
         ("record warns when the starting version is neither the Default Version nor a "
          "donor's start", rec_args(start="v001", image=s2), "the starting version, ships v001, "
@@ -2092,6 +2101,11 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
         before = sorted(tmp.rglob("*"))
         code, msg = layers_cmd("record", R, *args, "--dry-run")
         report(name, code == 0 and expect in msg and sorted(tmp.rglob("*")) == before, msg)
+    before = sorted(tmp.rglob("*"))
+    code, msg = layers_cmd("record", R, *rec_args("--mask", str(edge_mask), image=odd),
+                           "--dry-run")
+    report("record counts mask pixels above 5/255 as inside, with no warning",
+           code == 0 and "outside the mask" not in msg and sorted(tmp.rglob("*")) == before, msg)
     before = sorted(tmp.rglob("*"))
     code, msg = layers_cmd("record", R, *rec_args("--donor", "sources/ship-adj.png", "--mask",
                                                   str(odd_mask), start="v002", image=s2),
