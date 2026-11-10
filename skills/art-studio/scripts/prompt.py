@@ -7,7 +7,8 @@ Style must dominate, so the order is fixed and not up to whoever is typing:
   2. image role declarations, by NUMBER       (rules.md, image input roles)
   3. TASK: line — what to produce
   4. design text — what the subject IS
-  5. scene / layout / framing spec
+  5. scene / layout / framing spec; for a Layer, the Layer statement before it and
+     the transparent-background block after it (--layer-name, --opaque, --soft)
   6. closing style line, verbatim             (One Rule #3)
 
 Writing prompts by hand is how the Style Block drifts and how the closing line
@@ -44,7 +45,37 @@ ROLE_HINTS = {
                 "colors. Ignore this image's rendering.",
     "EDIT TARGET": "This is the image being modified. Preserve everything the "
                    "prompt does not change.",
+    "PLACEMENT": "An image of this same scene. Use it only for placement, scale and "
+                 "light direction. Do not copy any of its content.",
 }
+
+# The Layer statement and transparent-background block (SRD SR-17.6), in the form
+# Research b.gr7 validated. gen.py recognises a Layer prompt by TRANSPARENT_LEAD,
+# compared after whitespace is collapsed, so this wording is fixed.
+TRANSPARENT_LEAD = (
+    "BACKGROUND: TRANSPARENT. Output a PNG with a real alpha channel. Every pixel that "
+    "is not one of this layer's subjects is fully transparent (alpha 0): no backdrop "
+    "colour, no checkerboard pattern, no frame.")
+OPAQUE = "Fully opaque, with a clean edge: {}."
+SOFT = ("Partly transparent, fading to fully transparent at its edges so whatever lies "
+        "beneath shows through: {}.")
+
+
+def layer_statement(name: str, below: str | None, above: str | None) -> str:
+    clause = lambda text: " ".join(text.split()).rstrip(".")
+    out = f"This image is ONE LAYER of a layered illustration: the {clause(name)} layer only."
+    if below:
+        out += f" Beneath it: {clause(below)}."
+    if above:
+        out += f" Above it: {clause(above)}."
+    return out
+
+
+def transparent_block(opaque: str | None, soft: str | None) -> str:
+    clause = lambda text: " ".join(text.split()).rstrip(".")
+    return " ".join([TRANSPARENT_LEAD]
+                    + ([OPAQUE.format(clause(opaque))] if opaque else [])
+                    + ([SOFT.format(clause(soft))] if soft else []))
 
 
 class Fail(Exception):
@@ -118,6 +149,17 @@ def main() -> int:
                    help="design text from an arbitrary file instead")
     p.add_argument("--spec-file", metavar="PATH",
                    help="scene / layout / framing spec (the variable part)")
+    p.add_argument("--layer-name", metavar="NAME",
+                   help="a Layer generation: state that the image is ONE LAYER, this one, "
+                        "in the spec position")
+    p.add_argument("--below", metavar="TEXT", help="what lies beneath the Layer")
+    p.add_argument("--above", metavar="TEXT", help="what lies above the Layer")
+    p.add_argument("--opaque", metavar="TEXT",
+                   help="the Layer's fully opaque subjects; adds the transparent-"
+                        "background block")
+    p.add_argument("--soft", metavar="TEXT",
+                   help="the Layer's partly transparent content (glow, flames, haze); "
+                        "adds the transparent-background block")
     p.add_argument("--masked", action="store_true",
                    help="build a prompt for a masked API call: image 1 must be the "
                         "EDIT TARGET, and the closing style line names the anchor by "
@@ -160,8 +202,14 @@ def main() -> int:
     elif args.design_file:
         chunks.append(read_or_fail(Path(args.design_file), "--design-file"))
 
+    if (args.below or args.above) and not args.layer_name:
+        raise Fail("--below and --above complete the Layer statement; give --layer-name too")
+    if args.layer_name:
+        chunks.append(layer_statement(args.layer_name, args.below, args.above))
     if args.spec_file:
         chunks.append(read_or_fail(Path(args.spec_file), "--spec-file"))
+    if args.opaque or args.soft:
+        chunks.append(transparent_block(args.opaque, args.soft))
 
     chunks.append(closing)
     out = "\n\n".join(c.strip() for c in chunks if c.strip()) + "\n"

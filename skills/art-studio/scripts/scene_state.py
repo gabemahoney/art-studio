@@ -26,6 +26,7 @@ import sys
 
 sys.dont_write_bytecode = True
 
+import hashlib
 import json
 import os
 import re
@@ -98,6 +99,37 @@ def read_journal(scene_dir: Path) -> list[dict]:
     return [records[n] for n in sorted(records)]
 
 
+def read_receipt(folder: Path) -> dict:
+    """A record folder's generation.md as {label: value} for its labelled lines (the
+    first of each label), plus "stack": the Combined Image stack lines, bottom first,
+    and "stack_errors": numbered lines after Stack: that aren't in the stack format.
+    Empty when there is no receipt."""
+    try:
+        text = (Path(folder) / "generation.md").read_text(errors="replace")
+    except OSError:
+        return {}
+    fields: dict = {"stack": [], "stack_errors": []}
+    in_stack = False
+    for line in text.split("\n## ", 1)[0].splitlines():
+        if in_stack and re.match(r"\s*\d+\.", line):
+            if m := STACK_LINE.fullmatch(line.strip()):
+                fields["stack"].append(dict(zip(
+                    ("position", "layer", "path", "md5", "style", "approved", "removed",
+                     "entry"), m.groups())))
+            else:
+                fields["stack_errors"].append(line.strip())
+            continue
+        in_stack = False
+        if m := re.fullmatch(r"([A-Za-z][A-Za-z0-9 ]*?):[ \t]*(.*)", line):
+            fields.setdefault(m.group(1), m.group(2).strip())
+            in_stack = m.group(1) == "Stack"
+    return fields
+
+
+STACK_LINE = re.compile(r"(\d+)\. (\S+) (\S+) md5=([0-9a-f]{32}) style=(\S+) "
+                        r"approved=(yes|no) removed=(yes|no) entry=(.*)")
+
+
 def well_formed_plan(rec: dict) -> bool:
     if not (isinstance(rec.get("date"), str) and isinstance(rec.get("words"), str)
             and isinstance(rec.get("layered"), bool)):
@@ -135,6 +167,164 @@ def generated(scene_dir: Path, deleted_numbers) -> bool:
         if deleted_numbers(base):
             return True
     return False
+
+
+# ------------------------------------------------------------------ versions
+
+VNNN = re.compile(r"v(\d+)")
+RATIO_TOLERANCE = 0.01   # gen.py's one number for "two aspect ratios differ" (SR-3.5)
+
+
+def md5(path: Path) -> str:
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
+def frame_text(frame: dict) -> str:
+    return f"{frame['width']}x{frame['height']}"
+
+
+def ratio_matches(size: tuple[int, int], frame: dict) -> bool:
+    w, h = size
+    return abs(w / h - frame["width"] / frame["height"]) <= RATIO_TOLERANCE
+
+
+def folders(base: Path, deleted_numbers) -> list[dict]:
+    """Every vNNN record folder in base, plus every number its deletion log records,
+    in numeric order. A logged number is deleted whether or not its folder remains."""
+    deleted = deleted_numbers(base)
+    found = {int(m.group(1)): c for c in (base.iterdir() if base.is_dir() else [])
+             if c.is_dir() and (m := VNNN.fullmatch(c.name))}
+    return [{"name": f"v{n:03d}" if n not in found else found[n].name, "number": n,
+             "dir": found.get(n, base / f"v{n:03d}"), "deleted": n in deleted}
+            for n in sorted(set(found) | deleted)]
+
+
+def problem(folder: Path, deleted_numbers) -> str | None:
+    """Why the image a record folder holds can't be combined, attached or rebuilt from
+    (SR-1.8): deleted, missing, or not the md5 its receipt records. None when sound."""
+    folder = Path(folder)
+    if int(folder.name[1:]) in deleted_numbers(folder.parent):
+        return "deleted (its deletion log records it)"
+    image = folder / "image.png"
+    if not image.is_file():
+        return "missing (image.png is gone)"
+    recorded = read_receipt(folder).get("md5")
+    if not recorded:
+        return "unverifiable (its receipt records no md5)"
+    if md5(image) != recorded:
+        return f"altered (image.png's md5 is {md5(image)}; its receipt records {recorded})"
+    return None
+
+
+def sized(folder: Path, size_of) -> tuple[int, int] | None:
+    try:
+        return size_of(Path(folder) / "image.png")
+    except Exception:   # missing or unreadable: reported by problem()
+        return None
+
+
+def layer_versions(scene_dir: Path, layer_id: str, plan: dict, deleted_numbers,
+                   size_of) -> list[dict]:
+    """Each recorded version of a Layer, with whether it counts (SR-8.1) and why not.
+
+    A version counts when its Layer is in the current plan, its image.png is the
+    Frame's pixel size, and the Layer Entry its receipt records says the same as the
+    Layer's current one. size_of is gen.identify, passed in."""
+    current = {l["id"]: l["entry"] for l in plan["layers"]}
+    out = []
+    for v in folders(Path(scene_dir) / "layers" / layer_id, deleted_numbers):
+        v["layer"], v["entry"] = layer_id, read_receipt(v["dir"]).get("Layer Entry")
+        v["size"] = None if v["deleted"] else sized(v["dir"], size_of)
+        why = []
+        if v["deleted"]:
+            why.append("deleted")
+        elif layer_id not in current:
+            why.append("its Layer is not in the current plan")
+        elif v["size"] is None:
+            why.append("image.png is missing or unreadable")
+        elif v["size"] != (plan["frame"]["width"], plan["frame"]["height"]):
+            w, h = v["size"]
+            why.append(f"{w}x{h} doesn't match the Frame's aspect ratio"
+                       if not ratio_matches(v["size"], plan["frame"])
+                       else f"{w}x{h} is not the Frame's pixel size")
+        if (not v["deleted"] and layer_id in current
+                and not same_entry(v["entry"] or "", current[layer_id])):
+            why.append("made under another Layer Entry")
+        v["counts"], v["why_not"] = not why, why
+        out.append(v)
+    return out
+
+
+def latest_version(versions: list[dict]) -> dict | None:
+    """A Layer's latest version: its highest-numbered counting version."""
+    counting = [v for v in versions if v["counts"]]
+    return counting[-1] if counting else None
+
+
+def approved_version(records: list[dict], layer_id: str) -> dict | None:
+    """SR-8.2: the version the latest Layer or scene approval naming the Layer names.
+    Nothing records an approval yet, so no Layer has one."""
+    return None
+
+
+def default_version(records: list[dict], versions: list[dict]) -> dict | None:
+    """A Layer's Default Version (SR-8.5). With no keeps or approvals recorded, it is
+    the Layer's latest version, or None."""
+    return latest_version(versions)
+
+
+def classify(scene_dir: Path, path: Path, follow: bool = True) -> dict | None:
+    """What a file is to the scene, from its path: None when it lies outside
+    OUT/<scene>/; otherwise a dict whose "kind" is "layer" (with "layer", its Layer
+    ID), "draft", "combined", "adjusted" (a sources/ copy whose sidecar names one of
+    the scene's Layer Versions or Combined Images: "source" classifies that image and
+    "source_md5" is the md5 the sidecar records) or "other". All but "other" carry
+    "dir", the record folder whose image it is or was derived from."""
+    scene_dir = Path(scene_dir).resolve()
+    try:
+        parts = Path(path).resolve().relative_to(scene_dir).parts
+    except ValueError:
+        return None
+    vn = lambda s: VNNN.fullmatch(s) is not None
+    if len(parts) == 4 and parts[0] == "layers" and vn(parts[2]) and parts[3] == "image.png":
+        return {"kind": "layer", "layer": parts[1], "dir": scene_dir.joinpath(*parts[:3])}
+    if len(parts) == 3 and parts[0] == "drafts" and vn(parts[1]) and parts[2] == "image.png":
+        return {"kind": "draft", "dir": scene_dir.joinpath(*parts[:2])}
+    if len(parts) == 2 and vn(parts[0]) and parts[1] == "image.png":
+        return {"kind": "combined", "dir": scene_dir / parts[0]}
+    # follow=False: an adjusted copy comes from a Layer Version or Combined Image,
+    # never from another sources/ image, so a sidecar naming one is not followed
+    if follow and len(parts) == 2 and parts[0] == "sources" and parts[1].endswith(".png"):
+        try:
+            text = (scene_dir / "sources" / parts[1]).with_suffix(".md").read_text()
+        except OSError:
+            text = ""
+        m = re.search(r"^Derived from:\s*output:(\S+)\s+md5=([0-9a-f]{32})\s*$", text, re.M)
+        if m:
+            src = scene_dir.parent / m.group(1)
+            src = classify(scene_dir, src if src.suffix == ".png" else src / "image.png",
+                           follow=False)
+            if src and src["kind"] in ("layer", "combined"):
+                return {"kind": "adjusted", "source": src, "source_md5": m.group(2),
+                        "dir": src["dir"]}
+    return {"kind": "other"}
+
+
+def holds(info: dict | None, layer_id: str) -> Path | None:
+    """The version folder of layer_id that a classified image holds (SR-5.4): the
+    image itself when it is a version of that Layer, the version a Combined Image's
+    receipt stacks for it, or what an adjusted copy's source holds. None for none."""
+    if info is None:
+        return None
+    if info["kind"] == "adjusted":
+        return holds(info["source"], layer_id)
+    if info["kind"] == "layer":
+        return info["dir"] if info["layer"] == layer_id else None
+    if info["kind"] == "combined":
+        for s in read_receipt(info["dir"]).get("stack", []):
+            if s["layer"] == layer_id and s["path"].startswith("output:"):
+                return info["dir"].parents[1] / s["path"].removeprefix("output:")
+    return None
 
 
 # --------------------------------------------------------------------- plans
