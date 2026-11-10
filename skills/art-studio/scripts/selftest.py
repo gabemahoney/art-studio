@@ -3,6 +3,8 @@
 without generating anything.
 
   python3 -I scripts/selftest.py
+  python3 -I scripts/selftest.py --exhaustive   # adds the SR-15.4/16.6 exhaustive
+                                                # tests of the Scene Journal (slow)
 
 Builds a throwaway package and output folder in a temp directory, so it needs no
 real package and touches none. gen.py runs under --dry-run, fails before any
@@ -155,15 +157,18 @@ def main() -> int:
     if shutil.which("magick") is None:
         print("  skip: ImageMagick (magick) is not installed")
         return 1
+    if sys.argv[1:] not in ([], ["--exhaustive"]):
+        print(__doc__)
+        return 2
     tmp, started = Path(tempfile.mkdtemp(prefix="art-studio-selftest-")), time.monotonic()
     try:
-        return run_checks(tmp)
+        return run_checks(tmp, exhaustive=sys.argv[1:] == ["--exhaustive"])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         print(f"  selftest wall time: {time.monotonic() - started:.1f} s")
 
 
-def run_checks(tmp: Path) -> int:
+def run_checks(tmp: Path, exhaustive: bool = False) -> int:
     pkg, out = build_fixture(tmp)
     stub_logs = install_stub_codex(tmp)
     P, O = ["--package", str(pkg)], ["--output", str(out)]
@@ -1692,8 +1697,10 @@ def run_checks(tmp: Path) -> int:
          f"{BP}/layers/ships/v002", True, "may be deleted under today's rule"),
         ("check-delete says deleting a kept version ends its keep",
          f"{BP}/layers/planet/v004", True, "deleting it ends its keep (journal/014.json)"),
-        ("check-delete notes the scene's approved Combined Image",
-         f"{BP}/v005", True, "it is the scene's approved image (journal/012.json)"),
+        ("check-delete refuses the scene's approved Combined Image, naming it",
+         f"{BP}/v005", False, "it is the scene's approved image (journal/012.json)"),
+        ("check-delete allows a Combined Image that isn't the approved one",
+         f"{BP}/v004", True, "may be deleted under today's rule"),
     ]:
         before = sorted(tmp.rglob("*"))
         code, msg = layers_cmd("check-delete", BP, str(out / rel))
@@ -1848,7 +1855,10 @@ def run_checks(tmp: Path) -> int:
     report("a scene named drafts, not layered, promotes as today",
            code == 0 and (out / "drafts/final.png").exists(), msg)
 
-    explore_scene_states(tmp, report)
+    if exhaustive:
+        explore_scene_states(tmp, report)
+    else:
+        print("  (the SR-15.4/16.6 exhaustive tests run with --exhaustive)")
 
     print(f"\n  {checks - failures}/{checks} checks passed")
     return 1 if failures else 0

@@ -192,8 +192,8 @@ def cmd_keep(args) -> int:
 
 def cmd_check_delete(args) -> int:
     """SR-11.1: whether a Layer Version, Draft or Combined Image folder may be deleted.
-    A Layer's Approved Layer Version, or a version any Combined Image's receipt names,
-    never may, even if the User insists."""
+    A Layer's Approved Layer Version, a version any Combined Image's receipt names, and
+    the scene's approved Combined Image never may, even if the User insists."""
     scene = scene_dir(args)
     records, plan = layered_plan(scene, "check")
     folder = Path(args.folder).expanduser().resolve()
@@ -227,9 +227,10 @@ def cmd_check_delete(args) -> int:
             notes.append(f"deleting it ends its keep (journal/{st['keep']['number']:03d}.json)")
     elif what["kind"] == "combined" and view["scene_approval"] and \
             view["scene_approval"]["combined"] == gen.rel_of(folder):
-        notes.append(f"it is the scene's approved image (journal/"
-                     f"{view['scene_approval']['number']:03d}.json); final.png and "
-                     "final-layers/ could then no longer be completed from it")
+        raise Fail(f"{gen.rel_of(folder)} may not be deleted, even if the User insists: it is "
+                   f"the scene's approved image (journal/"
+                   f"{view['scene_approval']['number']:03d}.json), from which final.png and "
+                   "final-layers/ are completed.")
     print(f"  {gen.rel_of(folder)} may be deleted under today's rule, only if the User insists "
           f"after being warned: log it as {folder.name} in {gen.rel_of(folder.parent)}/DELETED.md")
     for n in notes:

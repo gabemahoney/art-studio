@@ -43,6 +43,7 @@ paid `--backend api` reads its key from `OPENAI_API_KEY` or
 
 ```bash
 python3 -I skills/art-studio/scripts/selftest.py   # every guard, against a throwaway package
+python3 -I skills/art-studio/scripts/selftest.py --exhaustive   # also after changing scene_state.py, layers.py or promote.py
 python3 -I skills/art-studio/scripts/gen.py --help
 ```
 
