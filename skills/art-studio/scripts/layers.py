@@ -111,19 +111,40 @@ def cmd_plan(args) -> int:
     scene = scene_dir(args)
     records = scene_state.read_journal(scene)                   # read
     proposal = proposal_from(args, records)
-    changes = scene_state.check_plan(                           # check
-        records, proposal, scene_state.generated(scene, gen.deleted_numbers))
+    made = scene_state.generated(scene, gen.deleted_numbers)
+    changes = scene_state.check_plan(records, proposal, made)   # check
     cur = scene_state.current_plan(records)
     based_on = scene_state.latest(records)
     if cur is not None and not changes:
         raise Fail(f"plan unchanged; nothing recorded: the proposal says the same as the "
                    f"current plan, journal/{cur['number']:03d}.json.")
+    record = {"number": based_on + 1, "kind": "plan", "date": date.today().isoformat(),
+              "words": args.confirmation, **proposal}
+    effects, stack, warnings = [], [], []
+    if cur is not None and cur["layered"] and proposal["layered"]:
+        ever = scene_state.journal_view(records)["ever"]
+        ids = ever + [l["id"] for l in proposal["layers"] if l["id"] not in ever]
+        effects = scene_state.plan_effects(records, proposal, scene_layers(scene, cur, ids))
+        if made:
+            try:
+                stack, warnings = step_combined(scene, records, cur, record)
+            except Fail as e:
+                raise Fail(f"plan not recorded: this change builds its Combined Image in the "
+                           f"same run (SR-2.6), and that can't be built: {e} Restore the file, "
+                           "or change the plan so it doesn't hold that version.") from None
 
     print(f"  scene {args.scene}: proposed Layer Plan")
     print("\n".join(show_plan(proposal)))
     if cur is not None:
         print(f"  changes from plan record {cur['number']}: "
               + ("; ".join(changes) or "none"))
+        for e in effects:
+            print(f"    {e}")
+    if stack:
+        print("  this change builds its Combined Image in the same run, bottom to top:")
+        print("\n".join(show_stack(stack, set())))
+        for w in warnings:
+            print(f"  warn: {w}", file=sys.stderr)
 
     if args.dry_run:
         print(f"  dry run: nothing written. Show the User this proposal; to record "
@@ -131,15 +152,46 @@ def cmd_plan(args) -> int:
         return 0
     scene_state.check_based_on(records, args.based_on)
     gen.writable_base(scene_state.journal_dir(scene))
+    if stack:   # where its Combined Image goes, checked before the record is published
+        gen.require_binary("magick", "install ImageMagick (brew install imagemagick)")
+        gen.writable_base(scene)
+        gen.deleted_numbers(scene)
 
-    record = {"number": based_on + 1, "kind": "plan", "date": date.today().isoformat(),
-              "words": args.confirmation, **proposal}
     if cur is not None:
-        record |= {"previous": cur["number"], "changes": changes}
+        record |= {"previous": cur["number"], "changes": changes + effects}
     dest = scene_state.publish(scene, record,                   # publish
                                fallback=not proposal["layered"])
     print(f"  wrote {dest}")
+    if stack:
+        try:
+            write_combined(scene, record, stack, warnings, args.confirmation,
+                           f"Layer Plan change, journal/{record['number']:03d}.json: "
+                           + "; ".join(changes))
+        except Fail as e:
+            raise Fail(f"{dest.name} is recorded, but its Combined Image wasn't built: {e} "
+                       "Build it with layers.py combine.") from None
     return 0
+
+
+def step_combined(scene: Path, records: list[dict], cur: dict,
+                  record: dict) -> tuple[list[dict], list[str]]:
+    """SR-2.6: the Combined Image a plan change builds in the same run, as the step's
+    Combined Image of a step that made no Layer Version: when it removes or reorders
+    Layers, or every Layer it adds, puts back or changes already has a counting
+    version, and some Layer then has one. Its stack and warnings, checked; empty when
+    it builds none."""
+    old = {l["id"]: l["entry"] for l in cur["layers"]}
+    new = {l["id"]: l["entry"] for l in record["layers"]}
+    moved = any(lid not in new for lid in old) or \
+        [lid for lid in old if lid in new] != [lid for lid in new if lid in old]
+    affected = [lid for lid in new
+                if lid not in old or not scene_state.same_entry(old[lid], new[lid])]
+    after = records + [record]
+    stack, _ = choose_stack(scene, after, record, {}, None, [])
+    held = {v["layer"] for v in stack}
+    if not stack or not (moved or all(lid in held for lid in affected)):
+        return [], []
+    return stack, check_stack(after, record, stack)
 
 
 # ---------------------------------------------------------- keep, check-delete
@@ -460,11 +512,159 @@ def opaque_everywhere(image: Path) -> bool:
     return not gen.has_alpha(image) or gen.fx(image, "minima", "-alpha", "extract") >= 0.98
 
 
+def choose_stack(scene: Path, records: list[dict], plan: dict, use: dict[str, int],
+                 only: list[str] | None, insert: list[tuple[str, int, int]]
+                 ) -> tuple[list[dict], list[str]]:
+    """The Combined Image's stack, bottom first: each chosen current Layer in the
+    current order, at its --use version or its Default Version (a Layer with no
+    counting version is left out, and returned), then each removed Layer --insert
+    names at its position. Each version gains "approved" and "removed"."""
+    ids = [l["id"] for l in plan["layers"]]
+    view = scene_state.journal_view(records)
+    layers = scene_layers(scene, plan, ids + [lid for lid, _, _ in insert])
+    stack, left_out = [], []
+
+    def pick(lid: str, n: int, flag: str) -> dict:
+        v = next((v for v in layers[lid] if v["number"] == n), None)
+        if v is None:
+            raise Fail(f"{flag} {lid}=v{n:03d}: Layer {lid} has no such version "
+                       "(layers.py status lists them)")
+        return v
+
+    for lid in ids:
+        if only is not None and lid not in only:
+            continue
+        v = pick(lid, use[lid], "--use") if lid in use else \
+            scene_state.layer_state(view, lid, layers[lid])["default"]
+        if v is None:
+            left_out.append(lid)
+            continue
+        stack.append(v)
+    for lid, n, pos in sorted(insert, key=lambda x: x[2]):
+        if pos > len(stack) + 1:
+            raise Fail(f"--insert {lid}=v{n:03d}@{pos}: the stack has {len(stack)} Layers "
+                       f"below it, so its position is at most {len(stack) + 1} (1 is the "
+                       "bottom)")
+        stack.insert(pos - 1, pick(lid, n, "--insert"))
+    for v in stack:
+        st = scene_state.layer_state(view, v["layer"], layers[v["layer"]])
+        v["approved"] = st["approved"] is not None and st["approved"]["number"] == v["number"]
+        v["removed"] = v["layer"] not in ids
+    return stack, left_out
+
+
+def check_stack(records: list[dict], plan: dict, stack: list[dict]) -> list[str]:
+    """SR-1.8 and SR-7.4 refusals for a stack, before anything is written; returns the
+    SR-7.7 warnings."""
+    frame = plan["frame"]
+    for v in stack:
+        image = v["dir"] / "image.png"
+        if trouble := scene_state.problem(v["dir"], gen.deleted_numbers):
+            raise Fail(f"Layer {v['layer']}'s {v['name']} can't be combined: "
+                       f"{gen.rel_of(image)} is {trouble}; "
+                       f"{gen.rel_of(v['dir'] / 'generation.md')} names it.")
+        if trouble := scene_state.journal_problem(records, v["layer"], v["dir"]):
+            raise Fail(f"Layer {v['layer']}'s {v['name']} can't be combined: "
+                       f"{gen.rel_of(image)} is {trouble}.")
+        if v["size"] != (frame["width"], frame["height"]):
+            w, h = v["size"]
+            raise Fail(f"Layer {v['layer']}'s {v['name']} is {w}x{h}, which "
+                       + ("doesn't match the Frame's aspect ratio" if not
+                          scene_state.ratio_matches(v["size"], frame) else
+                          "isn't the Frame's pixel size")
+                       + f" ({scene_state.frame_text(frame)}); it can't be combined.")
+    styles = {v["layer"]: style_of(v["dir"]) for v in stack}
+    warnings = []
+    if len(set(styles.values())) > 1:
+        warnings.append("the Layers were made under different style versions: "
+                        + ", ".join(f"{lid} {s}" for lid, s in styles.items()))
+    for v in stack[1:]:
+        if opaque_everywhere(v["dir"] / "image.png"):
+            warnings.append(f"Layer {v['layer']} ({v['name']}) is opaque everywhere, so it "
+                            "hides every Layer beneath it")
+    for i, v in enumerate(stack, start=1):
+        if v["removed"]:
+            warnings.append(f"Layer {v['layer']} ({v['name']}) is removed from the current "
+                            f"plan and included at position {i}, so this Combined Image "
+                            "can't be approved")
+    return warnings
+
+
+def style_of(folder: Path) -> str:
+    return scene_state.read_receipt(folder).get("Style", "unknown")
+
+
+def show_stack(stack: list[dict], named: set[str]) -> list[str]:
+    """SR-7.8: each Layer's version and whether it is its Approved Layer Version."""
+    return [f"    {i:2} {v['layer']} {v['name']}  ("
+            + ("removed; placed with --insert" if v["removed"] else
+               "named with --use" if v["layer"] in named else "its Default Version")
+            + ("; its" if v["approved"] else "; not its") + " Approved Layer Version"
+            + ("" if v["counts"] or v["removed"] else
+               "; doesn't count: " + "; ".join(v["why_not"])) + ")"
+            for i, v in enumerate(stack, start=1)]
+
+
+def write_combined(scene: Path, plan: dict, stack: list[dict], warnings: list[str],
+                   request: str | None, mode: str | None) -> Path:
+    """Build the stack into the scene's next vNNN/ and write its receipt (SR-7.5,
+    SR-7.6). Every check has run already."""
+    frame = plan["frame"]
+    gen.require_binary("magick", "install ImageMagick (brew install imagemagick)")
+    gen.writable_base(scene)
+    deleted = gen.deleted_numbers(scene)
+    with tempfile.TemporaryDirectory(prefix="layers-combine-") as tmp:
+        built = Path(tmp) / "image.png"
+        cmd = stack_command(frame, [v["dir"] / "image.png" for v in stack], built)
+        run_stack(cmd)
+        out = gen.target_dir(scene, deleted)
+        image = out / "image.png"
+        shutil.copyfile(built, image)
+    print(f"  wrote {image}")
+
+    # the receipt first, so a Combined Image never stands without one; the
+    # deliverable is then recorded on it as gen.py --refinish records one
+    free = lambda text: scene_state.norm(text or "TODO — fill in")
+    yn = lambda b: "yes" if b else "no"
+    lines = [
+        f"# {scene.name} {out.name}",
+        "",
+        "No image model was called: layers.py combine stacked recorded Layer Versions "
+        "with ImageMagick.",
+        f"User request verbatim: {free(request)}",
+        f"Mode: {free(mode)}",
+        "Tool: art-studio layers.py combine (ImageMagick only)",
+        f"Package: {gen.PKG}",
+        f"Output folder: {gen.OUT}",
+        "Kind: Combined Image",
+        f"Layer Plan: journal/{plan['number']:03d}.json",
+        f"Frame: {scene_state.frame_text(frame)}",
+        "Stack:",
+        *(f"{i}. {v['layer']} {gen.rel_of(v['dir'])} "
+          f"md5={scene_state.md5(v['dir'] / 'image.png')} style={style_of(v['dir'])} "
+          f"approved={yn(v['approved'])} removed={yn(v['removed'])} "
+          f"entry={scene_state.norm(v['entry'] or '')}"
+          for i, v in enumerate(stack, start=1)),
+        f"ImageMagick: {imagemagick_version()}",
+        f"Command: {shown(cmd, built, image)}",
+        f"Pixel signature: {signature(image)}",
+        f"md5: {scene_state.md5(image)}",
+        f"Date: {date.today().isoformat()}",
+        "Status: awaiting user evaluation",
+        f"Output: image.png, {scene_state.frame_text(frame)} (the Combined Image, frozen)",
+        "Review: pending — record with review.py once you have seen it",
+        *(f"Warning: {w}" for w in warnings),
+        "",
+    ]
+    (out / "generation.md").write_text("\n".join(lines))
+    print(f"  wrote {out / 'generation.md'}")
+    return out
+
+
 def cmd_combine(args) -> int:
     scene = scene_dir(args)
     records, plan = layered_plan(scene, "combine")
-    ids, frame = [l["id"] for l in plan["layers"]], plan["frame"]
-    current = {l["id"]: l["entry"] for l in plan["layers"]}
+    ids = [l["id"] for l in plan["layers"]]
 
     def in_plan(lid: str, flag: str) -> str:
         if lid not in ids:
@@ -488,6 +688,24 @@ def cmd_combine(args) -> int:
             raise Fail("--only names no Layer; give a comma-separated list of Layer IDs")
         if outside := [lid for lid in use if lid not in only]:
             raise Fail(f"--use names {', '.join(outside)}, which --only leaves out")
+    insert, ever = [], scene_state.journal_view(records)["ever"]
+    for spec in args.insert:
+        m = re.fullmatch(r"([^=\s]+)=v(\d+)@(\d+)", spec.strip())
+        if not m or not int(m.group(3)):
+            raise Fail(f"--insert {spec!r}: name a removed Layer's version and its position "
+                       "as ID=vNNN@POSITION, counting from 1 at the bottom, e.g. moon=v002@2")
+        lid = m.group(1)
+        if lid in ids:
+            raise Fail(f"--insert {lid}: Layer {lid} is in the current plan; name its version "
+                       "with --use instead")
+        if lid not in ever:
+            raise Fail(f"--insert {lid}: no Layer Plan of this scene ever held a Layer {lid!r}")
+        if int(m.group(3)) in [i[2] for i in insert]:
+            raise Fail(f"--insert names position {m.group(3)} twice; give each removed Layer "
+                       "its own position")
+        if lid in [i[0] for i in insert]:
+            raise Fail(f"--insert names Layer {lid} twice")
+        insert.append((lid, int(m.group(2)), int(m.group(3))))
 
     spec = {}
     if args.preset:
@@ -503,67 +721,16 @@ def cmd_combine(args) -> int:
     flatten = args.flatten or spec.get("flatten") or gen.DEFAULT_FLATTEN
     max_mb = args.max_mb if args.max_mb is not None else spec.get("max_mb", gen.DEFAULT_MAX_MB)
 
-    # the stack: each chosen current Layer in the current order, at its named version
-    # or its Default Version; a Layer with no counting version is left out
-    layers, stack, left_out = scene_layers(scene, plan), [], []
-    view, approved = scene_state.journal_view(records), {}
-    for lid in ids:
-        if only is not None and lid not in only:
-            continue
-        st = scene_state.layer_state(view, lid, layers[lid])
-        approved[lid] = st["approved"]
-        if lid in use:
-            v = next((v for v in layers[lid] if v["number"] == use[lid]), None)
-            if v is None:
-                raise Fail(f"--use {lid}=v{use[lid]:03d}: Layer {lid} has no such version "
-                           "(layers.py status lists them)")
-        else:
-            v = st["default"]
-            if v is None:
-                left_out.append(lid)
-                continue
-        stack.append(v)
-    is_approved = lambda v: (approved[v["layer"]] is not None
-                             and approved[v["layer"]]["number"] == v["number"])
+    stack, left_out = choose_stack(scene, records, plan, use, only, insert)
     if not stack:
         raise Fail("no Layer " + ("--only names" if only else "of the current plan")
                    + " has a counting version, so there is nothing to combine. Generate "
                    "the Layers first (gen.py --layer).")
-    for v in stack:
-        image = v["dir"] / "image.png"
-        if trouble := scene_state.problem(v["dir"], gen.deleted_numbers):
-            raise Fail(f"Layer {v['layer']}'s {v['name']} can't be combined: "
-                       f"{gen.rel_of(image)} is {trouble}; "
-                       f"{gen.rel_of(v['dir'] / 'generation.md')} names it.")
-        if trouble := scene_state.journal_problem(records, v["layer"], v["dir"]):
-            raise Fail(f"Layer {v['layer']}'s {v['name']} can't be combined: "
-                       f"{gen.rel_of(image)} is {trouble}.")
-        if v["size"] != (frame["width"], frame["height"]):
-            w, h = v["size"]
-            raise Fail(f"Layer {v['layer']}'s {v['name']} is {w}x{h}, which "
-                       + ("doesn't match the Frame's aspect ratio" if not
-                          scene_state.ratio_matches(v["size"], frame) else
-                          "isn't the Frame's pixel size")
-                       + f" ({scene_state.frame_text(frame)}); it can't be combined.")
+    warnings = check_stack(records, plan, stack)
 
-    styles = {v["layer"]: scene_state.read_receipt(v["dir"]).get("Style", "unknown")
-              for v in stack}
-    warnings = []
-    if len(set(styles.values())) > 1:
-        warnings.append("the Layers were made under different style versions: "
-                        + ", ".join(f"{lid} {s}" for lid, s in styles.items()))
-    for v in stack[1:]:
-        if opaque_everywhere(v["dir"] / "image.png"):
-            warnings.append(f"Layer {v['layer']} ({v['name']}) is opaque everywhere, so it "
-                            "hides every Layer beneath it")
-
-    print(f"  scene {args.scene}: Combined Image, Frame {scene_state.frame_text(frame)}, "
+    print(f"  scene {args.scene}: Combined Image, Frame {scene_state.frame_text(plan['frame'])}, "
           "bottom to top:")
-    for i, v in enumerate(stack, start=1):
-        how = ("named with --use" if v["layer"] in use else "its Default Version")
-        print(f"    {i:2} {v['layer']} {v['name']}  ({how}; "
-              + ("its" if is_approved(v) else "not its") + " Approved Layer Version"
-              + ("" if v["counts"] else "; doesn't count: " + "; ".join(v["why_not"])) + ")")
+    print("\n".join(show_stack(stack, set(use))))
     if left_out:
         print(f"    left out, with no counting version: {', '.join(left_out)}")
     for w in warnings:
@@ -571,59 +738,216 @@ def cmd_combine(args) -> int:
     if args.dry_run:
         print("  dry run: nothing built or written")
         return 0
+    out = write_combined(scene, plan, stack, warnings, args.request, args.mode)
+    if final_size:
+        dest, delivered = gen.finish(out / "image.png", final_size, flatten, max_mb)
+        gen.record_delivered(out / "generation.md", delivered)
+        print(f"  wrote {dest}  ({delivered})")
+    return 0
 
-    gen.require_binary("magick", "install ImageMagick (brew install imagemagick)")
-    gen.writable_base(scene)
-    deleted = gen.deleted_numbers(scene)
-    with tempfile.TemporaryDirectory(prefix="layers-combine-") as tmp:
-        built = Path(tmp) / "image.png"
-        cmd = stack_command(frame, [v["dir"] / "image.png" for v in stack], built)
-        run_stack(cmd)
-        out = gen.target_dir(scene, deleted)
-        image = out / "image.png"
-        shutil.copyfile(built, image)
-    print(f"  wrote {image}")
 
-    # the receipt first, so a Combined Image never stands without one; the
-    # deliverable is then recorded on it as gen.py --refinish records one
-    free = lambda text: scene_state.norm(text or "TODO — fill in")
+# -------------------------------------------------------------------- record
+
+
+def cmd_record(args) -> int:
+    """SR-6.1, SR-6.2: record a Layer Version made with ImageMagick (path 1, a
+    transplant, moving or scaling content, or path 3's composite) into the Layer's
+    next vNNN/, with a receipt naming its starting version, donors, commands and mask.
+    No image model is called."""
+    if not args.commands.strip():
+        raise Fail("--commands is required: the ImageMagick commands that made the image")
+    scene = scene_dir(args)
+    records, plan = layered_plan(scene, "record")
+    lid, frame = args.layer, plan["frame"]
+    ids = [l["id"] for l in plan["layers"]]
+    if lid not in ids:
+        raise Fail(f"Layer {lid!r} is not in the current Layer Plan "
+                   f"(journal/{plan['number']:03d}.json), which holds, bottom to top: "
+                   f"{', '.join(ids)}; a fix is recorded only for a current Layer.")
+    versions = scene_layers(scene, plan, [lid])[lid]
+    start = scene_state.find(versions, args.start)
+    if start is None:
+        raise Fail(f"--start {args.start}: Layer {lid} has no such version (layers.py status "
+                   "lists them)")
+    sound(records, start, "be the starting version")
+
+    image = Path(args.image).expanduser().resolve()
+    if not image.is_file() or image.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+        raise Fail(f"--image {args.image}: not a PNG file")
+    size = size_of(image, "--image")
+    if size != (frame["width"], frame["height"]):
+        raise Fail(f"--image {args.image} is {size[0]}x{size[1]}, not the Frame's pixel size "
+                   f"({scene_state.frame_text(frame)}); a Layer Version is stored at the Frame.")
+    start_png = start["dir"] / "image.png"
+    if gen.has_alpha(start_png) and not gen.has_alpha(image):
+        raise Fail(f"--image {args.image} has no alpha channel, but the starting version "
+                   f"{lid} {start['name']} has one: the fix dropped the Layer's transparency. "
+                   "Keep the alpha channel (see reference/imagemagick.md).")
+
+    donors = [donor(scene, records, plan, spec) for spec in args.donor]
+    mask = None
+    if args.mask:
+        mask = Path(args.mask).expanduser().resolve()
+        if not mask.is_file():
+            raise Fail(f"no such mask: {args.mask}")
+        if size_of(mask, "--mask") != size:
+            w, h = size_of(mask, "--mask")
+            raise Fail(f"--mask {args.mask} is {w}x{h}, not the Frame's pixel size "
+                       f"({scene_state.frame_text(frame)})")
+
+    warnings = []
+    view = scene_state.journal_view(records)
+    default = scene_state.layer_state(view, lid, versions)["default"]
+    donor_starts = {d["start"] for d in donors if d["layer"] == lid and d["start"]}
+    if (default is None or default["number"] != start["number"]) and \
+            gen.rel_of(start["dir"]) not in donor_starts:
+        warnings.append(f"the starting version, {lid} {start['name']}, isn't the Layer's "
+                        "Default Version ("
+                        + (default["name"] if default else "none") + ") nor the starting "
+                        "version of a donor generated for this Layer")
+    style = style_of(start["dir"])
+    for d in donors:
+        if d["style"] != style:
+            warnings.append(f"donor {d['shown']} was made under style {d['style']}; the "
+                            f"starting version under {style}")
+    if mask is not None and (changed := changed_outside(start_png, image, mask)):
+        warnings.append(f"{changed} pixels differ from the starting version outside the mask "
+                        "(premultiplied colour or alpha): a fix changes nothing outside its "
+                        "region")
+
+    print(f"  scene {args.scene}: record a fix of Layer {lid} from {start['name']}, "
+          "made with ImageMagick (no image model)")
+    for d in donors:
+        print(f"    donor: {d['shown']}")
+    for w in warnings:
+        print(f"  warn: {w}", file=sys.stderr)
+    if args.dry_run:
+        print("  dry run: nothing written")
+        return 0
+
+    base = gen.writable_base(scene / "layers" / lid)
+    if mask is not None:
+        gen.writable_base(scene / "masks")
+    out = gen.target_dir(base, gen.deleted_numbers(base))
+    shutil.copyfile(image, out / "image.png")
+    kept = None
+    if mask is not None:
+        kept = mask if mask.parent == (scene / "masks").resolve() else \
+            scene / "masks" / f"{lid}-{out.name}-{mask.name}"
+        if kept != mask:
+            kept.parent.mkdir(exist_ok=True)
+            shutil.copyfile(mask, kept)
+    entry = next(l["entry"] for l in plan["layers"] if l["id"] == lid)
+    w, h = size
     lines = [
-        f"# {args.scene} {out.name}",
+        f"# {args.scene} {lid} {out.name}",
         "",
-        "No image model was called: layers.py combine stacked recorded Layer Versions "
-        "with ImageMagick.",
-        f"User request verbatim: {free(args.request)}",
-        f"Mode: {free(args.mode)}",
-        "Tool: art-studio layers.py combine (ImageMagick only)",
+        "No image model was called: this Layer Version was made with ImageMagick and "
+        "recorded with layers.py record.",
+        f"Tool: art-studio layers.py record (ImageMagick only)",
+        f"Style: {style}",
         f"Package: {gen.PKG}",
         f"Output folder: {gen.OUT}",
-        "Kind: Combined Image",
+        "Kind: Layer Version",
+        f"Layer: {lid}",
+        f"Layer Entry: {scene_state.norm(entry)}",
         f"Layer Plan: journal/{plan['number']:03d}.json",
-        f"Frame: {scene_state.frame_text(frame)}",
-        "Stack:",
-        *(f"{i}. {v['layer']} {gen.rel_of(v['dir'])} "
-          f"md5={scene_state.md5(v['dir'] / 'image.png')} style={styles[v['layer']]} "
-          f"approved={'yes' if is_approved(v) else 'no'} removed=no "
-          f"entry={scene_state.norm(v['entry'] or '')}"
-          for i, v in enumerate(stack, start=1)),
-        f"ImageMagick: {imagemagick_version()}",
-        f"Command: {shown(cmd, built, image)}",
-        f"Pixel signature: {signature(image)}",
-        f"md5: {scene_state.md5(image)}",
+        f"Starting version: {gen.rel_of(start['dir'])} md5={scene_state.md5(start_png)}",
+        "Donors: " + ("; ".join(f"{d['shown']} md5={d['md5']}" for d in donors) or "none"),
+        f"Commands: {scene_state.norm(args.commands)}",
+        "Mask: " + (gen.rel_of(kept) + " (white = the fixed region)" if kept else "none given"),
+        f"md5: {scene_state.md5(out / 'image.png')}",
         f"Date: {date.today().isoformat()}",
         "Status: awaiting user evaluation",
-        f"Output: image.png, {scene_state.frame_text(frame)} (the Combined Image, frozen)",
+        f"Output: image.png, {w}x{h} (the Layer Version, frozen)",
         "Review: pending — record with review.py once you have seen it",
         *(f"Warning: {w}" for w in warnings),
         "",
     ]
     (out / "generation.md").write_text("\n".join(lines))
+    print(f"  wrote {out / 'image.png'}")
     print(f"  wrote {out / 'generation.md'}")
-    if final_size:
-        dest, delivered = gen.finish(image, final_size, flatten, max_mb)
-        gen.record_delivered(out / "generation.md", delivered)
-        print(f"  wrote {dest}  ({delivered})")
     return 0
+
+
+def size_of(path: Path, flag: str) -> tuple[int, int]:
+    """An input's pixel size; an image ImageMagick can't read as one frame is refused."""
+    try:
+        out = gen.magick(f"{path}[0]", "-format", "%w %h", "info:").split()
+        return int(out[0]), int(out[1])
+    except (subprocess.CalledProcessError, ValueError, IndexError):
+        raise Fail(f"{flag} {path}: ImageMagick can't read it as an image") from None
+
+
+def sound(records: list[dict], v: dict, role: str) -> None:
+    """SR-1.8: refuse a Layer Version that is deleted, missing or altered."""
+    for trouble in (scene_state.problem(v["dir"], gen.deleted_numbers),
+                    scene_state.journal_problem(records, v["layer"], v["dir"])):
+        if trouble:
+            raise Fail(f"Layer {v['layer']}'s {v['name']} can't {role}: "
+                       f"{gen.rel_of(v['dir'] / 'image.png')} is {trouble}.")
+
+
+def donor(scene: Path, records: list[dict], plan: dict, spec: str) -> dict:
+    """A --donor: one of the scene's Layer Versions (ID=vNNN) or an adjusted copy of
+    one (sources/<name>.png), checked; never a Draft, a Combined Image or anything
+    from outside the scene."""
+    if m := re.fullmatch(r"([^=\s/]+)=v(\d+)", spec.strip()):
+        lid, n = m.group(1), int(m.group(2))
+        if lid not in scene_state.journal_view(records)["ever"]:
+            raise Fail(f"--donor {spec}: no Layer Plan of this scene ever held a Layer {lid!r}")
+        v = scene_state.find(scene_layers(scene, plan, [lid])[lid], f"v{n:03d}")
+        if v is None:
+            raise Fail(f"--donor {spec}: Layer {lid} has no such version")
+        sound(records, v, "be a donor")
+        path, shown_as = v["dir"] / "image.png", gen.rel_of(v["dir"])
+    else:
+        path = Path(spec).expanduser()
+        path = (path if path.is_absolute() else scene / path).resolve()
+        if not path.is_file():
+            raise Fail(f"--donor {spec}: no such file")
+        what = scene_state.classify(scene, path)
+        kind = what and what["kind"]
+        if kind == "layer":
+            return donor(scene, records, plan, f"{what['layer']}={what['dir'].name}")
+        if kind != "adjusted" or what["source"]["kind"] != "layer":
+            raise Fail(f"--donor {spec}: a donor is one of this scene's Layer Versions "
+                       "(ID=vNNN) or an adjusted copy of one in its sources/ with a sidecar; "
+                       + {"draft": "a Draft", "combined": "a Combined Image",
+                          "adjusted": "an adjusted copy of a Combined Image",
+                          None: "an image from outside the scene"}.get(
+                              kind, "a file with no sidecar naming one of its Layer Versions")
+                       + " is never one.")
+        src = what["source"]
+        v = {"layer": src["layer"], "name": src["dir"].name, "dir": src["dir"]}
+        sound(records, v, "be a donor's source")
+        if scene_state.md5(src["dir"] / "image.png") != what["source_md5"]:
+            raise Fail(f"--donor {spec}: its sidecar records md5 {what['source_md5']}, which "
+                       f"isn't {gen.rel_of(src['dir'] / 'image.png')}")
+        shown_as = gen.rel_of(path)
+    receipt = scene_state.read_receipt(v["dir"])
+    start = receipt.get("Starting version", "").split(" ")[0]
+    return {"layer": v["layer"], "shown": shown_as, "md5": scene_state.md5(path),
+            "style": receipt.get("Style", "unknown"),
+            "start": start if start.startswith("output:") else None}
+
+
+def changed_outside(start: Path, image: Path, mask: Path) -> int:
+    """How many pixels outside the mask (where it is black) differ between the two
+    images, compared premultiplied: colour times alpha, and alpha. An image without an
+    alpha channel counts as opaque."""
+    prem = lambda p: ["(", str(p), "-alpha", "set", "-background", "black", "-alpha",
+                      "remove", "-alpha", "off", ")", "(", str(p), "-alpha", "set",
+                      "-alpha", "extract", ")"]
+    got = gen.magick(*prem(start), *prem(image), "-alpha", "off",
+                     "(", "-clone", "0", "-clone", "2", "-compose", "difference", "-composite",
+                     "-separate", "-evaluate-sequence", "max", ")",
+                     "(", "-clone", "1", "-clone", "3", "-compose", "difference", "-composite",
+                     ")", "-delete", "0-3", "-evaluate-sequence", "max", "-threshold", "0",
+                     "(", mask, "-alpha", "off", "-colorspace", "Gray", "-threshold", "0",
+                     "-negate", ")", "-compose", "multiply", "-composite",
+                     "-precision", "15", "-format", "%[fx:mean*w*h]", "info:")
+    return round(float(got))
 
 
 # ------------------------------------------------------------------- rebuild
@@ -725,6 +1049,9 @@ def main(argv: list[str] | None = None) -> int:
     co.add_argument("--use", action="append", default=[], metavar="ID=vNNN",
                     help="this version of a Layer instead of its Default Version")
     co.add_argument("--only", metavar="ID,...", help="combine only these Layers")
+    co.add_argument("--insert", action="append", default=[], metavar="ID=vNNN@POSITION",
+                    help="include a removed Layer's version at this position, from 1 at "
+                         "the bottom; such a Combined Image can't be approved")
     co.add_argument("--request", help="the User's request verbatim, for the receipt")
     co.add_argument("--mode", help="what this Combined Image shows, for the receipt")
     co.add_argument("--preset", metavar="NAME",
@@ -749,6 +1076,25 @@ def main(argv: list[str] | None = None) -> int:
                     help="the journal number the dry run printed (required unless --dry-run)")
     kp.add_argument("--dry-run", action="store_true", help="say what keeping does; write nothing")
     kp.set_defaults(func=cmd_keep)
+
+    rc = sub.add_parser("record", parents=[common],
+                        help="record a Layer Version made with ImageMagick (a fix); calls "
+                             "no image model")
+    rc.add_argument("--layer", required=True, metavar="ID")
+    rc.add_argument("--image", required=True, metavar="FILE",
+                    help="the fixed Layer, a PNG at the Frame's pixel size")
+    rc.add_argument("--start", required=True, metavar="vNNN",
+                    help="the version of the Layer the fix started from")
+    rc.add_argument("--donor", action="append", default=[],
+                    metavar="ID=vNNN|sources/NAME.png",
+                    help="each Layer Version, or adjusted copy of one, whose pixels the fix "
+                         "used")
+    rc.add_argument("--mask", metavar="FILE",
+                    help="the fix's mask, WHITE = the fixed region; kept in OUT/<scene>/masks/")
+    rc.add_argument("--commands", required=True, metavar="TEXT",
+                    help="the ImageMagick commands that made the image")
+    rc.add_argument("--dry-run", action="store_true", help="run the checks; write nothing")
+    rc.set_defaults(func=cmd_record)
 
     cd = sub.add_parser("check-delete", parents=[common],
                         help="report whether a Layer Version, Draft or Combined Image folder "

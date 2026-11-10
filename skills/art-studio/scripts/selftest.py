@@ -928,7 +928,8 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
         return scene_state.read_receipt(out / rel)
 
     def rgba(path: Path, depth: int = 8) -> bytes:
-        return subprocess.run(["magick", str(path), "-depth", str(depth), "rgba:-"],
+        return subprocess.run(["magick", str(path), "-depth", str(depth), "-endian", "MSB",
+                               "rgba:-"],
                               capture_output=True, check=True).stdout
 
     def stub_inputs() -> list[list[str]]:
@@ -1182,8 +1183,10 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
          "only a Combined Image gets"),
         ("--final-size on a Draft refused", [*lay, "--draft", "--final-size", "800x450"],
          "only a Combined Image gets"),
-        ("--mask on a Layer generation refused",
-         [*lay, "--layer", "ships", "--backend", "api", "--mask", small], "path 3"),
+        ("a masked Layer generation editing a Combined Image refused",
+         [*SP, "--prompt-file", str(mprompt), "--layer", "ships", "--backend", "api",
+          "--attach", "space/v004/image.png:EDIT TARGET", *A, "--mask", small,
+          "--size", "192x108"], "repaints its starting version itself"),
         ("a Draft as a Layer's EDIT TARGET refused",
          [*lay, "--layer", "ships", "--attach", "space/drafts/v001/image.png:EDIT TARGET"],
          "a Draft is a reference for placement"),
@@ -1292,7 +1295,7 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
          [*lay, "--layer", "ships", "--attach", "assets/people/tester/reference.png:IDENTITY",
           "--attach", "sources/tester-crop.png:IDENTITY"], "invariants OK"),
         ("an attachment with alpha is named as sent flattened in a dry run",
-         [*lay, "--layer", "ships", *PL("space/v003/image.png")],
+         [*lay, "--layer", "ships", *PL("space/v001/image.png")],
          "(has alpha: sent flattened onto black)"),
         ("a Layer above the bottom whose prompt lacks the block warns",
          [*SP, "--layer", "asteroids", "--prompt-file", str(prompt), *A],
@@ -1612,32 +1615,48 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
            and "      Default Version: v001 (its Approved Layer Version); Approved Layer "
                "Version: v001" in st and "kept: v002" not in st, st_removed + st)
 
+    # SR-2.6 on the way: the Layer Entry change built nothing (asteroids then had no
+    # counting version), changing it back, the removal and the put-back each built one
+    stacks = {v: [(s["layer"], s["path"][-4:]) for s in receipt(f"{BP}/{v}").get("stack", [])]
+              for v in ("v005", "v006", "v007")}
+    report("plan builds its Combined Image on a change back, a removal and a put-back, and "
+           "none on a change whose Layer has no counting version",
+           not (out / BP / "v008").exists() and stacks == {
+               "v005": [("planet", "v003"), ("asteroids", "v002"), ("ships", "v001")],
+               "v006": [("planet", "v003"), ("asteroids", "v002")],
+               "v007": [("planet", "v003"), ("asteroids", "v002"), ("ships", "v001")]}
+           and receipt(f"{BP}/v007").get("Mode") == "Layer Plan change, journal/011.json: puts "
+               "back Layer ships, with its Layer Entry from plan record 8"
+           and receipt(f"{BP}/v007").get("User request verbatim") == "Yes."
+           and receipt(f"{BP}/v007").get("Layer Plan") == "journal/011.json",
+           f"{stacks}\n{receipt(f'{BP}/v007')}")
+
     # the scene approval: one record, then final.png, final.md and final-layers/
-    code, msg = layers_cmd("combine", BP, "--mode", "the whole scene")
+    code = 0
     st = status_of(BP)
-    code2, msg2 = approve(f"{BP}/v005", "--dry-run")
-    code3, msg3 = approve(f"{BP}/v005", "--approval", "Approve the scene.", "--based-on", "11")
+    code2, msg2 = approve(f"{BP}/v007", "--dry-run")
+    code3, msg3 = approve(f"{BP}/v007", "--approval", "Approve the scene.", "--based-on", "11")
     rec = record(BP, 12) if code3 == 0 else {}
     held = [("planet", "v003"), ("asteroids", "v002"), ("ships", "v001")]
     files = sorted(p.name for p in (out / BP / "final-layers").iterdir()) \
         if (out / BP / "final-layers").is_dir() else []
     report("status lists the Combined Image as approvable, and the dry run names its Layers",
-           code == code2 == 0 and re.search(r"^  can be approved now: .*\bv005$", st, re.M)
+           code == code2 == 0 and re.search(r"^  can be approved now: .*\bv007$", st, re.M)
            and "planet v003, asteroids v002, ships v001" in msg2 and "--based-on 11" in msg2,
            st + msg2)
     report("approving a Combined Image writes one scene approval record, final.png, final.md "
            "and one byte-identical Layer file per Layer",
            code3 == 0 and journal(BP)[-1] == "012.json" and rec.get("kind") == "scene-approval"
-           and rec.get("combined") == f"output:{BP}/v005"
+           and rec.get("combined") == f"output:{BP}/v007"
            and [(l["layer"], l["version"]) for l in rec.get("layers", [])] == held
-           and (out / BP / "final.png").read_bytes() == (out / BP / "v005/image.png").read_bytes()
+           and (out / BP / "final.png").read_bytes() == (out / BP / "v007/image.png").read_bytes()
            and (out / BP / "final.md").read_text() == scene_state.final_md(rec)
            and files == ["01-planet.png", "02-asteroids.png", "03-ships.png"]
            and all((out / BP / "final-layers" / f"{i:02d}-{l}.png").read_bytes()
                    == (out / BP / "layers" / l / v / "image.png").read_bytes()
                    for i, (l, v) in enumerate(held, start=1))
-           and "approved and promoted to final.png" in receipt(f"{BP}/v005").get("Status", "")
-           and "approved in Combined Image v005" in
+           and "approved and promoted to final.png" in receipt(f"{BP}/v007").get("Status", "")
+           and "approved in Combined Image v007" in
                receipt(f"{BP}/layers/asteroids/v002").get("Status", ""), f"{msg3}\n{rec}")
     finals = {p: p.read_bytes() for p in [out / BP / "final.png", out / BP / "final.md",
                                          *(out / BP / "final-layers").iterdir()]}
@@ -1647,23 +1666,23 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
                         "--based-on", "12", "--replace")
     report("approving a new ships version after the scene approval leaves the approved image "
            "and Layer files unchanged, and says so",
-           code == 0 and "the scene's approved image, v005, holds ships v001" in msg
+           code == 0 and "the scene's approved image, v007, holds ships v001" in msg
            and {p: p.read_bytes() for p in finals if p.exists()} == finals
            and sorted(p.name for p in (out / BP / "final-layers").iterdir()) == files, msg)
 
     shutil.rmtree(out / BP / "final-layers")
     st = status_of(BP)
-    code, msg = approve(f"{BP}/v005")
+    code, msg = approve(f"{BP}/v007")
     report("missing Layer files show in status; promote.py completes them from the record "
-           "without writing another", "final-layers/ is missing: run promote.py on v005" in st
+           "without writing another", "final-layers/ is missing: run promote.py on v007" in st
            and code == 0 and "completing the copies" in msg and journal(BP)[-1] == "013.json"
            and {p: p.read_bytes() for p in finals if p.exists()} == finals
            and "integrity problems: none" in status_of(BP), st + msg)
-    code, msg = approve(f"{BP}/v005", "--approval", "Again.", "--based-on", "13")
+    code, msg = approve(f"{BP}/v007", "--approval", "Again.", "--based-on", "13")
     report("once the copies match, approving that Combined Image again is a new approval, "
-           "naming what it replaces", code != 0 and "the approved image v005 (journal/012.json)"
+           "naming what it replaces", code != 0 and "the approved image v007 (journal/012.json)"
            in msg and "Layer ships's Approved Layer Version v003 (journal/013.json" in msg, msg)
-    code, msg = approve(f"{BP}/v005", "--based-on", "13")
+    code, msg = approve(f"{BP}/v007", "--based-on", "13")
     report("a new Combined Image approval without --approval refused",
            code != 0 and "--approval is required" in msg, msg)
 
@@ -1680,7 +1699,7 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
            and "      Default Version: v003 (its Approved Layer Version); Approved Layer "
                "Version: v003" in st
            and "  can be approved now: " in st
-           and "  approved image: v005, approved in journal/012.json" in st
+           and "  approved image: v007, approved in journal/012.json" in st
            and "    final-layers/03-ships.png: ships v001" in st, st)
 
     # check-delete: approved and used versions never; others under today's rule
@@ -1698,7 +1717,7 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
         ("check-delete says deleting a kept version ends its keep",
          f"{BP}/layers/planet/v004", True, "deleting it ends its keep (journal/014.json)"),
         ("check-delete refuses the scene's approved Combined Image, naming it",
-         f"{BP}/v005", False, "it is the scene's approved image (journal/012.json)"),
+         f"{BP}/v007", False, "it is the scene's approved image (journal/012.json)"),
         ("check-delete allows a Combined Image that isn't the approved one",
          f"{BP}/v004", True, "may be deleted under today's rule"),
     ]:
@@ -1854,6 +1873,461 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
     code, msg = approve("drafts/v001", "--approval", "Yes.")
     report("a scene named drafts, not layered, promotes as today",
            code == 0 and (out / "drafts/final.png").exists(), msg)
+
+    # --- revising one Layer (SR-5.4, SR-5.5, SR-6): starting versions, fixes recorded
+    # with layers.py record, path 3 and a moved ship, and path 4's colour-only merge
+    R = "rev"
+    plan(R, *LF, "--layer", f"planet={PE}", "--layer", f"asteroids={AE}",
+         "--layer", f"ships={SE}", *YES, "--based-on", "0")
+    fake_version(R, "planet", blues[0], PE)
+    fake_version(R, "asteroids", rocks_a, AE)
+    fake_version(R, "ships", ships_png, SE)
+    fake_version(R, "ships", ships2_png, SE)          # ships v002, the Default Version
+    layers_cmd("combine", R, "--use", "ships=v001")   # v001 holds ships v001
+    layers_cmd("combine", R)                          # v002 holds ships v002
+    layers_cmd("combine", R, "--only", "planet,asteroids")   # v003 holds no ships
+    (out / R / "sources").mkdir()
+    shutil.copyfile(user_png, out / R / "sources/bare.png")
+    shutil.copyfile(out / R / "v001/image.png", out / R / "sources/held.png")
+    (out / R / "sources/held.md").write_text(
+        f"Derived from: output:{R}/v001/image.png md5={gen.md5(out / R / 'v001/image.png')}\n"
+        "Command: magick image.png -modulate 100,90 held.png\n")
+    shutil.copyfile(out / R / "layers/ships/v002/image.png", out / R / "sources/ship-adj.png")
+    (out / R / "sources/ship-adj.md").write_text(
+        f"Derived from: output:{R}/layers/ships/v002/image.png "
+        f"md5={gen.md5(out / R / 'layers/ships/v002/image.png')}\n"
+        "Command: magick image.png -modulate 100,90 ship-adj.png\n")
+    RS = ["--scene", R, "--prompt-file", str(lblock), *A, "--layer", "ships"]
+    ET = lambda rel: ["--attach", f"{R}/{rel}:EDIT TARGET"]
+    RP = lambda rel: PL(f"{R}/{rel}")
+    for name, args, ok, expect in [
+        ("a Layer generation starting from a version that isn't the Default Version warns, "
+         "naming both", ET("layers/ships/v001/image.png"), True,
+         "the starting version, ships v001, isn't Layer ships's Default Version (v002, latest)"),
+        ("an edit attaching an image that holds another version of its Layer refused",
+         ET("layers/ships/v002/image.png") + RP("v001/image.png"), False,
+         "holds Layer ships's v001, but this generation starts from v002"),
+        ("a fresh generation attaching a Combined Image holding a version of its Layer refused",
+         RP("v001/image.png"), False, "holds Layer ships's v001, but this generation is fresh"),
+        ("a fresh generation attaching an adjusted copy holding a version of its Layer refused",
+         RP("sources/held.png"), False, "holds Layer ships's v001, but this generation is fresh"),
+        ("an edit from the Default Version attaching a Combined Image holding it is accepted, "
+         "without the warning", ET("layers/ships/v002/image.png") + RP("v002/image.png"), True,
+         "invariants OK"),
+        ("a fresh generation attaching a Combined Image without its Layer is accepted",
+         RP("v003/image.png"), True, "invariants OK"),
+    ]:
+        before = sorted(tmp.rglob("*"))
+        code, msg = gen_run(None, *RS, *args, *DRY)
+        report(name, (code == 0) == ok and expect in msg and "Traceback" not in msg
+               and (not ok or "isn't Layer ships's Default" not in msg or "warns" in name)
+               and sorted(tmp.rglob("*")) == before, f"expected {expect!r}, exit {code}:\n{msg}")
+
+    for name, args, expect in [
+        ("a scene-folder copy (raw.png) attached to a Layer generation refused, in any role",
+         ["--attach", "space/layers/planet/v001/raw.png:STYLE"], "lies in the scene's folder"),
+        ("--emissive on a masked Layer generation refused",
+         ["--emissive", "--backend", "api", "--mask", small], "no meaning on a masked Layer"),
+    ]:
+        before = sorted(tmp.rglob("*"))
+        code, msg = gen_run(None, *lay, "--layer", "ships", *args, *DRY)
+        report(name, code != 0 and expect in msg and "Traceback" not in msg
+               and sorted(tmp.rglob("*")) == before, msg)
+
+    def region_replace(start: Path, donor: Path, mask_png: Path, dest: Path) -> str:
+        """SR-6.3: inside the mask, colour and alpha are the mask-weighted mix of the two
+        images' premultiplied values; outside it nothing changes."""
+        mix = lambda c: f"((1-wm)*u.{c}*u.a+wm*v.{c}*v.a)/max(aa,1e-9)"
+        cmd = ["magick", "(", str(start), "-colorspace", "sRGB", ")", "(", str(donor),
+               "-colorspace", "sRGB", ")", "(", str(mask_png), "-alpha", "off",
+               "-colorspace", "Gray", ")", "-alpha", "set", "-fx",
+               f"wm=u[2].r; aa=(1-wm)*u.a+wm*v.a; channel({mix('r')},{mix('g')},{mix('b')},0,aa)",
+               "-define", "png:color-type=6", str(dest)]
+        subprocess.run(cmd, check=True, capture_output=True)
+        return " ".join(cmd)
+
+    def differs_only_where(ci_a: Path, ci_b: Path, old: Path, new: Path) -> tuple[int, list]:
+        a, b = rgba(ci_a), rgba(ci_b)
+        o, n = rgba(old, 16), rgba(new, 16)
+        moved = [i for i in range(0, len(a), 4) if a[i:i + 4] != b[i:i + 4]]
+        clear = lambda s, i: s[2 * i + 6:2 * i + 8] == b"\0\0"
+        return len(moved), [i // 4 for i in moved if clear(o, i) and clear(n, i)]
+
+    # path 3 on the asteroid Layer: regenerate from its Default Version, take only the
+    # fixed region and composite it onto that version, record it, then one Combined Image
+    rocks_fix = img("rocks-fix.png", "xc:none", *disc("#a09080", 120, 40, 14),
+                    *disc("#7a7060", 40, 80, 9))
+    code, msg = gen_run(rocks_fix, "--scene", R, "--prompt-file", str(lblock), *A,
+                        "--layer", "asteroids", *ET("layers/asteroids/v001/image.png"))
+    fix_mask = img("fix-mask.png", "xc:black", "-fill", "white", "-draw",
+                   "rectangle 100,20 140,60", "-blur", "0x3", "-alpha", "off")
+    a1, a2 = (out / R / f"layers/asteroids/{v}/image.png" for v in ("v001", "v002"))
+    composite = fxd / "rocks-composite.png"
+    commands = region_replace(a1, a2, fix_mask, composite)
+    code2, msg2 = layers_cmd("record", R, "--layer", "asteroids", "--image", str(composite),
+                             "--start", "v001", "--donor", "asteroids=v002", "--mask",
+                             str(fix_mask), "--commands", commands)
+    r = receipt(f"{R}/layers/asteroids/v003")
+    code3, msg3 = layers_cmd("combine", R, "--mode", "asteroid fix step")   # v004
+    count, stray = differs_only_where(out / R / "v002/image.png", out / R / "v004/image.png",
+                                      a1, out / R / "layers/asteroids/v003/image.png")
+    report("path 3: a regeneration's fixed region composited onto the starting version is "
+           "recorded, with no warning, and the step's one Combined Image differs only where "
+           "the asteroid Layer's old or new version isn't fully transparent",
+           code == code2 == code3 == 0 and "warn" not in msg2
+           and (out / R / "layers/asteroids/v003/generation.md").read_text().startswith(
+               f"# {R} asteroids v003\n\nNo image model was called")
+           and r.get("Kind") == "Layer Version" and r.get("Layer Entry") == AE
+           and r.get("Starting version") == f"output:{R}/layers/asteroids/v001 md5={gen.md5(a1)}"
+           and r.get("Donors") == f"output:{R}/layers/asteroids/v002 md5={gen.md5(a2)}"
+           and r.get("Mask", "").startswith(f"output:{R}/masks/asteroids-v003-fix-mask.png")
+           and (out / R / "masks/asteroids-v003-fix-mask.png").read_bytes()
+               == fix_mask.read_bytes()
+           and r.get("Style") == "v1" and r.get("md5") == gen.md5(composite)
+           and r.get("Commands", "").startswith("magick ") and "Status" in r
+           and [(s["layer"], s["path"][-4:]) for s in receipt(f"{R}/v004").get("stack", [])]
+           == [("planet", "v001"), ("asteroids", "v003"), ("ships", "v002")]
+           and count > 0 and not stray, f"{msg2}\n{msg3}\n{r}\n{count} changed, stray {stray[:5]}")
+
+    # a ship moved within its Layer with ImageMagick: the Layers beneath show where it was
+    s2, moved_png = out / R / "layers/ships/v002/image.png", fxd / "ships-moved.png"
+    magick(str(s2), "-roll", "+30+0", str(moved_png))
+    code, msg = layers_cmd("record", R, "--layer", "ships", "--image", str(moved_png),
+                           "--start", "v002", "--commands",
+                           "magick ships/v002/image.png -roll +30+0 moved.png")
+    code2, msg2 = layers_cmd("combine", R, "--mode", "moved ship step")   # v005
+    s3 = out / R / "layers/ships/v003/image.png"
+    count, stray = differs_only_where(out / R / "v004/image.png", out / R / "v005/image.png",
+                                      s2, s3)
+    lower = fxd / "rev-lower.png"
+    magick(str(out / R / "layers/planet/v001/image.png"), str(out / R / "layers/asteroids/"
+           "v003/image.png"), "-compose", "Over", "-composite", str(lower))
+    at = lambda p, x, y: rgba(p)[4 * (y * 192 + x):4 * (y * 192 + x) + 4]
+    report("a ship moved and recorded gives one Combined Image naming the same other "
+           "versions, showing the Layers beneath where the ship was",
+           code == code2 == 0 and "warn" not in msg
+           and receipt(f"{R}/layers/ships/v003").get("Donors") == "none"
+           and receipt(f"{R}/layers/ships/v003").get("Mask") == "none given"
+           and [(s["layer"], s["path"][-4:]) for s in receipt(f"{R}/v005").get("stack", [])]
+           == [("planet", "v001"), ("asteroids", "v003"), ("ships", "v003")]
+           and count > 0 and not stray
+           and at(out / R / "v005/image.png", 112, 30) == at(lower, 112, 30)
+           != at(out / R / "v004/image.png", 112, 30), f"{msg}\n{msg2}\n{count} {stray[:5]}")
+
+    # record's refusals, each writing nothing, and its warnings
+    shutil.copyfile(out / R / "v001/image.png", out / R / "sources/ci-adj.png")
+    (out / R / "sources/ci-adj.md").write_text(
+        f"Derived from: output:{R}/v001 md5={gen.md5(out / R / 'v001/image.png')}\n")
+    (out / R / "drafts/v001").mkdir(parents=True)
+    shutil.copyfile(draft_png, out / R / "drafts/v001/image.png")
+    (out / R / "drafts/v001/generation.md").write_text(f"Kind: Draft\nmd5: {gen.md5(draft_png)}\n")
+    rec_args = lambda *extra, image=moved_png, start="v003", layer="ships": [
+        "--layer", layer, "--image", str(image), "--start", start, "--commands", "magick x",
+        *extra]
+    s1_img = out / R / "layers/ships/v001/image.png"
+    saved_s1 = s1_img.read_bytes()
+    for name, args, expect, prep in [
+        ("record refuses a Draft donor", rec_args("--donor", "drafts/v001/image.png"),
+         "a Draft is never one", None),
+        ("record refuses a Combined Image donor", rec_args("--donor", "v001/image.png"),
+         "a Combined Image is never one", None),
+        ("record refuses an adjusted copy of a Combined Image as donor",
+         rec_args("--donor", "sources/ci-adj.png"), "an adjusted copy of a Combined Image", None),
+        ("record refuses a donor from another scene",
+         rec_args("--donor", str(out / BP / "layers/ships/v001/image.png")),
+         "an image from outside the scene is never one", None),
+        ("record refuses a donor file with no sidecar",
+         rec_args("--donor", "sources/bare.png"), "a file with no sidecar", None),
+        ("record refuses an image that isn't the Frame's pixel size",
+         rec_args(image=square_png), "is 150x150, not the Frame's pixel size", None),
+        ("record refuses an image that dropped the starting version's alpha channel",
+         rec_args(image=flat_png), "has no alpha channel, but the starting version", None),
+        ("record refuses a Layer not in the current plan", rec_args(layer="moon"),
+         "is not in the current Layer Plan", None),
+        ("record refuses a starting version that doesn't exist", rec_args(start="v009"),
+         "has no such version", None),
+        ("record refuses a file that isn't a PNG", rec_args(image=svg), "not a PNG file", None),
+        ("record refuses a mask that isn't the Frame's size", rec_args("--mask", small),
+         "not the Frame's pixel size", None),
+        ("record refuses a donor that is altered, naming the file",
+         rec_args("--donor", "ships=v001"), f"output:{R}/layers/ships/v001/image.png is altered",
+         lambda: magick(str(s1_img), "-fill", "#ffffff", "-draw", "point 1,1", str(s1_img))),
+        ("record refuses a donor file that doesn't exist",
+         rec_args("--donor", "sources/none.png"), "no such file", None),
+        ("record refuses a donor from a Layer no plan held",
+         rec_args("--donor", "moon=v001"), "ever held a Layer 'moon'", None),
+        ("record refuses a mask ImageMagick can't read, without a traceback",
+         rec_args("--mask", str(spec)), "can't read it as an image", None),
+        ("record refuses empty --commands",
+         ["--layer", "ships", "--image", str(moved_png), "--start", "v003", "--commands", " "],
+         "--commands is required", None),
+    ]:
+        if prep:
+            prep()
+        before = sorted(tmp.rglob("*"))
+        code, msg = layers_cmd("record", R, *args)
+        report(name, code != 0 and expect in msg and "Traceback" not in msg
+               and sorted(tmp.rglob("*")) == before,
+               f"expected {expect!r} and nothing written, exit {code}:\n{msg}")
+        s1_img.write_bytes(saved_s1)
+    code, msg = layers_cmd("record", "single-gen", *rec_args())
+    report("record refuses a Single-Layer Scene", code != 0 and "not a Layered Scene" in msg, msg)
+
+    odd = fxd / "ships-odd.png"
+    magick(str(s3), "-fill", "#22cc22", "-draw", "rectangle 0,0 9,9", "-draw",
+           "rectangle 180,90 191,107", str(odd))
+    odd_mask = img("odd-mask.png", "xc:black", "-fill", "white", "-draw", "rectangle 0,0 9,9",
+                   "-alpha", "off")
+    fake_version(R, "ships", ships_png, SE, style="v2")       # ships v004, another style
+    for name, args, expect in [
+        ("record warns, with the count, when pixels outside the mask changed",
+         rec_args("--mask", str(odd_mask), image=odd),
+         "216 pixels differ from the starting version outside the mask"),
+        ("record warns when the starting version is neither the Default Version nor a "
+         "donor's start", rec_args(start="v001", image=s2), "the starting version, ships v001, "
+         "isn't the Layer's Default Version (v004)"),
+        ("record warns when a donor was made under another style version",
+         rec_args("--donor", "ships=v004"), "was made under style v2"),
+    ]:
+        before = sorted(tmp.rglob("*"))
+        code, msg = layers_cmd("record", R, *args, "--dry-run")
+        report(name, code == 0 and expect in msg and sorted(tmp.rglob("*")) == before, msg)
+    before = sorted(tmp.rglob("*"))
+    code, msg = layers_cmd("record", R, *rec_args("--donor", "sources/ship-adj.png", "--mask",
+                                                  str(odd_mask), start="v002", image=s2),
+                           "--dry-run")
+    report("record accepts an adjusted copy of a Layer Version as donor, and an unchanged "
+           "outside, without the mask warning",
+           code == 0 and "donor: output:rev/sources/ship-adj.png" in msg
+           and "outside the mask" not in msg and sorted(tmp.rglob("*")) == before, msg)
+
+    # path 4 on a Layer: the paid output's colour merged into the starting version,
+    # keeping its alpha everywhere and every pixel outside the mask (the API stubbed)
+    plan("p4", *LF, "--layer", "base=Night sky", "--layer", "top=The lantern", *YES,
+         "--based-on", "0")
+    start_png = img("p4-start.png", "xc:none", *disc("#cc3322", 60, 54, 30), "-fill",
+                    "rgba(200,180,40,0.5)", "-draw", "rectangle 100,20 150,90")
+    fake_version("p4", "top", start_png, "The lantern")
+    p4_mask = img("p4-mask.png", "xc:black", "-fill", "white", "-draw",
+                  "rectangle 70,30 140,80", "-blur", "0x4", "-alpha", "off")
+    paid = img("p4-paid.png", "xc:rgb(60,120,200)")
+    seen = {}
+
+    def paid_generate(_prompt, attachments, *_a, **_kw) -> dict:
+        seen["first"] = attachments[0][0]
+        seen["alpha"] = gen.has_alpha(attachments[0][0])
+        return {"data": [{"b64_json": base64.b64encode(seen["paid"].read_bytes()).decode()}]}
+
+    def masked_layer_run(version: str, paid_png: Path) -> tuple[str, str]:
+        """A real masked gen.py --layer run, in-process, its API call stubbed."""
+        saved = (sys.argv, gen.api_key, gen.generate, gen.generate_codex)
+        seen["paid"] = paid_png
+        sys.argv = ["gen.py", *P, *O, "--scene", "p4", "--layer", "top", "--prompt-file",
+                    str(mprompt), "--attach", f"p4/layers/top/{version}/image.png:EDIT TARGET",
+                    *A, "--backend", "api", "--mask", str(p4_mask), "--approved-by",
+                    "Yes, one call."]
+        gen.api_key, gen.generate, gen.generate_codex = (lambda: "selftest-key"), \
+            paid_generate, no_codex
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                result = f"exit {gen.main()}"
+        except (Exception, SystemExit) as e:
+            result = f"{type(e).__name__}: {e}"
+        finally:
+            sys.argv, gen.api_key, gen.generate, gen.generate_codex = saved
+            gen.PKG = gen.OUT = None
+        return result, err.getvalue()
+
+    result, err = masked_layer_run("v001", paid)
+    err = io.StringIO(err)
+    v2d = out / "p4/layers/top/v002"
+    r = receipt("p4/layers/top/v002")
+    problems, partly, feathered = [], 0, 0
+    if result == "exit 0":
+        st, mg, mk, pd = (rgba(p, 16) for p in (start_png, v2d / "image.png", p4_mask, paid))
+        q = lambda b, i: int.from_bytes(b[i:i + 2], "big") / 65535
+        for px in range(192 * 108):
+            i = 8 * px
+            m, a = q(mk, i), q(st, i + 6)
+            if q(mg, i + 6) != a:
+                problems.append(f"pixel {px}: alpha {q(mg, i + 6)} is not the start's {a}")
+            elif m == 0 and mg[i:i + 8] != st[i:i + 8]:
+                problems.append(f"pixel {px}: changed outside the mask")
+            elif m > 0 and a > 0:
+                want = [(1 - m) * q(st, i + 2 * c) + m * min(1, q(pd, i + 2 * c) / a)
+                        for c in range(3)]
+                if any(abs(q(mg, i + 2 * c) - want[c]) > 2 / 255 for c in range(3)):
+                    problems.append(f"pixel {px}: colour {[q(mg, i + 2 * c) for c in range(3)]}"
+                                    f", want {want}")
+                partly += m == 1 and 0 < a < 1
+                feathered += 0 < m < 1
+    report("path 4 on a Layer: the paid colour is merged inside the mask, divided by the "
+           "starting alpha and mixed in the feathered edge; alpha and every pixel outside "
+           "are kept, the paid output stays as raw.png",
+           result == "exit 0" and not problems and partly > 0 and feathered > 0
+           and seen.get("alpha") is False and seen["first"] != out / "p4/layers/top/v001/image.png"
+           and (v2d / "raw.png").read_bytes() == paid.read_bytes()
+           and r.get("Repair", "").startswith("masked repaint (path 4) merged as colour only")
+           and r.get("Starting version") == "output:p4/layers/top/v001"
+           and r.get("Checks") == "round 1, merged Layer Version: pass"
+           and r.get("md5") == gen.md5(v2d / "image.png"),
+           f"{result}; partly {partly}, feathered {feathered}; checks {r.get('Checks')}; "
+           f"start {r.get('Starting version')}\n" + "\n".join(problems[:3]) + err.getvalue())
+    grey = img("p4-grey.png", "xc:none", "-fill", "rgba(180,180,180,0.5)", "-draw",
+               "rectangle 20,10 170,100")
+    fake_version("p4", "top", grey, "The lantern")                          # top v003
+    result, err = masked_layer_run("v003", img("p4-red.png", "xc:rgb(60,0,0)"))
+    got = rgba(out / "p4/layers/top/v004/image.png")[4 * (55 * 192 + 105):4 * (55 * 192 + 106)] \
+        if result == "exit 0" else b""
+    report("path 4 on a grey starting version still merges the paid colour",
+           result == "exit 0" and len(got) == 4 and abs(got[0] - 120) <= 2 and got[1] <= 2
+           and got[2] <= 2 and got[3] in (127, 128), f"{result} {got.hex()} {err}")
+    code, msg = gen_run(None, "--scene", "p4", "--layer", "top", "--prompt-file", str(mprompt),
+                        "--attach", "p4/layers/top/v004/image.png:EDIT TARGET", *A,
+                        "--backend", "api", "--mask", str(p4_mask), *DRY)
+    report("a masked Layer generation from its Default Version is accepted in a dry run, "
+           "without the missing-block warning",
+           code == 0 and "invariants OK" in msg and "lacks the transparent" not in msg
+           and "isn't Layer top's Default" not in msg, msg)
+
+    # a plan change whose Combined Image can't be written records nothing; a damaged
+    # version it would hold refuses the change, saying why
+    plan("ro", *LF, "--layer", "a=Part a", "--layer", "b=Part b", *YES, "--based-on", "0")
+    fake_version("ro", "a", rocks_a, "Part a")
+    fake_version("ro", "b", ships_png, "Part b")
+    (out / "ro").chmod(0o555)
+    try:
+        code, msg = plan("ro", *LF, "--layer", "b=@1", "--layer", "a=@1", *YES, "--based-on", "1")
+    finally:
+        (out / "ro").chmod(0o755)
+    report("a plan change whose Combined Image can't be written is refused before recording",
+           code != 0 and "not writable" in msg and journal("ro") == ["001.json"]
+           and "Traceback" not in msg, msg)
+    ra = out / "ro/layers/a/v001/image.png"
+    saved_ra = ra.read_bytes()
+    magick(str(ra), "-fill", "#ffffff", "-draw", "point 1,1", str(ra))
+    code, msg = plan("ro", *LF, "--layer", "b=@1", "--layer", "a=@1", "--dry-run")
+    ra.write_bytes(saved_ra)
+    report("a plan change whose Combined Image would hold an altered version is refused, "
+           "saying the plan isn't recorded", code != 0 and "plan not recorded" in msg
+           and "is altered" in msg, msg)
+
+    # --- changing the plan later (SR-2.4, SR-2.6, SR-7.2): the PRD's moon moved and back
+    MO, PM = "moon", "The planet and its moon"
+    plan(MO, *LF, "--layer", f"planet={PM}", "--layer", f"asteroids={AE}",
+         "--layer", f"ships={SE}", *YES, "--based-on", "0")                          # 1
+    for lid, image, entry in (("planet", blues[0], PM), ("asteroids", rocks_a, AE),
+                              ("ships", ships_png, SE)):
+        fake_version(MO, lid, image, entry)
+    approve(f"{MO}/layers/planet/v001", "--approval", "That planet.", "--based-on", "1")   # 2
+    approve(f"{MO}/layers/asteroids/v001", "--approval", "Those rocks.", "--based-on", "2")  # 3
+    fake_version(MO, "planet", blues[1], PM)
+    fake_version(MO, "planet", blues[2], PM)
+    layers_cmd("keep", MO, "--layer", "planet", "--version", "v002", "--words", "Keep v2.",
+               "--based-on", "3")                                                    # 4
+    move = ["--layer", "planet=The planet", "--layer", "asteroids=The asteroid field and the "
+            "moon", "--layer", "ships=@1"]
+    code, msg = plan(MO, *LF, *move, "--dry-run")
+    report("a proposal moving the moon names both approvals that would stop counting and the "
+           "keep that would end, and builds nothing",
+           code == 0 and "Layer planet's Approved Layer Version v001 (journal/002.json) would "
+           "stop counting" in msg and "Layer asteroids's Approved Layer Version v001 "
+           "(journal/003.json) would stop counting" in msg
+           and "the keep of Layer planet's v002 (journal/004.json) would end, for good" in msg
+           and "builds its Combined Image" not in msg, msg)
+    code, msg = plan(MO, *LF, *move, *YES, "--based-on", "4")                       # 5
+    rec = record(MO, 5) if code == 0 else {}
+    report("the plan record states the approvals and the keep its change affects",
+           code == 0 and any("would stop counting" in c for c in rec.get("changes", []))
+           and any("would end, for good" in c for c in rec.get("changes", []))
+           and not (out / MO / "v001").exists(), f"{msg}\n{rec}")
+    fake_version(MO, "planet", blues[3], "The planet")                       # planet v004
+    fake_version(MO, "asteroids", rocks_b, "The asteroid field and the moon")  # asteroids v002
+    layers_cmd("combine", MO)                                                       # v001
+    back = ["--layer", "planet=@1", "--layer", "asteroids=@1", "--layer", "ships=@1"]
+    code, msg = plan(MO, *LF, *back, "--dry-run")
+    code2, msg2 = plan(MO, *LF, *back, *YES, "--based-on", "5")                     # 6
+    built = receipt(f"{MO}/v002")
+    code3, msg3 = approve(f"{MO}/v002", "--approval", "Yes, that one.", "--based-on", "6")  # 7
+    report("moving the moon back builds a Combined Image at once holding the original "
+           "Approved Layer Versions, planet at v1 not v2, and promote.py accepts it",
+           code == code2 == code3 == 0
+           and "Layer planet's Approved Layer Version v001 (journal/002.json) would count "
+           "again" in msg and "builds its Combined Image in the same run" in msg
+           and [(s["layer"], s["path"][-4:], s["approved"]) for s in built.get("stack", [])]
+           == [("planet", "v001", "yes"), ("asteroids", "v001", "yes"), ("ships", "v001", "no")]
+           and record(MO, 7).get("kind") == "scene-approval", msg + msg2 + msg3)
+    final_bytes = (out / MO / "final.png").read_bytes() if code3 == 0 else b""
+    code, msg = plan(MO, *LF, *move, *YES, "--based-on", "7")                       # 8
+    code2, msg2 = approve(f"{MO}/layers/planet/v004", "--approval", "Planet alone.",
+                          "--based-on", "8")
+    code3, msg3 = approve(f"{MO}/layers/planet/v004", "--approval", "Planet alone.",
+                          "--based-on", "8", "--replace")                           # 9
+    code4, msg4 = plan(MO, *LF, *back, *YES, "--based-on", "9")                     # 10
+    st = status_of(MO)
+    report("approving a new planet version after moving the moon out again names the earlier "
+           "approval, though it no longer counts, and moving back doesn't restore it",
+           code == code3 == code4 == 0 and code2 != 0
+           and "Approved Layer Version is v001 (journal/007.json, counting or not)" in msg2
+           and "Layer planet's Approved Layer Version v004 (journal/009.json) would stop "
+           "counting" in msg4
+           and "      Default Version: v003 (its latest version); Approved Layer Version: v004 "
+           "(doesn't count)" in st, msg2 + msg4 + st)
+    code, msg = plan(MO, *LF, *back, "--layer", "comet=A comet", *YES, "--based-on", "10")  # 11
+    newest = max(int(p.name[1:]) for p in (out / MO).glob("v[0-9]*"))
+    code2, msg2 = approve(f"{MO}/v{newest:03d}", "--approval", "Yes.", "--based-on", "11",
+                          "--replace")
+    report("adding a Layer builds nothing, and a Combined Image without it is refused",
+           code == 0 and "builds its Combined Image" not in msg and newest == 4
+           and code2 != 0 and "comet: missing from the Combined Image" in msg2, msg + msg2)
+    code, msg = plan(MO, *LF, "--layer", "planet=@1", "--layer", "asteroids=@1",
+                     "--layer", "comet=@11", *YES, "--based-on", "11")             # 12
+    st = status_of(MO)
+    report("removing a Layer builds its Combined Image at once; status lists the removed "
+           "Layer with its versions and approval",
+           code == 0 and [(s["layer"], s["path"][-4:]) for s in receipt(f"{MO}/v005").get("stack", [])]
+           == [("planet", "v003"), ("asteroids", "v001")]
+           and "  removed Layers:\n    ships:\n      v001  doesn't count: its Layer is removed"
+           in st and "      Approved Layer Version: v001" in st, msg + st)
+    code, msg = layers_cmd("combine", MO, "--insert", "ships=v001@3", "--mode", "one-off")
+    r = receipt(f"{MO}/v006")
+    code2, msg2 = approve(f"{MO}/v006", "--approval", "Yes.", "--based-on", "12", "--replace")
+    report("combine --insert places a removed Layer at its position, warns and records it, "
+           "and that Combined Image can't be approved",
+           code == 0 and [(s["layer"], s["removed"]) for s in r.get("stack", [])]
+           == [("planet", "no"), ("asteroids", "no"), ("ships", "yes")]
+           and "Layer ships (v001) is removed from the current plan and included at position 3"
+           in msg and "included at position 3" in r.get("Warning", "")
+           and "3 ships v001  (removed; placed with --insert" in msg
+           and code2 != 0 and "ships: removed" in msg2, msg + msg2)
+    report("the approved Combined Image and final.png are unchanged by the plan changes",
+           final_bytes and (out / MO / "final.png").read_bytes() == final_bytes
+           and record(MO, 7).get("combined") == f"output:{MO}/v002")
+    for name, args, expect in [
+        ("combine --insert of a Layer in the current plan refused", ["--insert", "planet=v001@1"],
+         "name its version with --use"),
+        ("combine --insert of a Layer never planned refused", ["--insert", "moon=v001@1"],
+         "ever held a Layer"),
+        ("a malformed combine --insert refused", ["--insert", "ships=v001"], "ID=vNNN@POSITION"),
+        ("combine --insert past the top of the stack refused", ["--insert", "ships=v001@4"],
+         "its position is at most 3"),
+        ("combine --insert of a version that doesn't exist refused",
+         ["--insert", "ships=v009@1"], "has no such version"),
+        ("combine --insert naming one position twice refused",
+         ["--insert", "ships=v001@1", "--insert", "ships=v001@1"], "names position 1 twice"),
+    ]:
+        before = sorted(tmp.rglob("*"))
+        code, msg = layers_cmd("combine", MO, *args)
+        report(name, code != 0 and expect in msg and "Traceback" not in msg
+               and sorted(tmp.rglob("*")) == before, msg)
+    code, msg = plan("fresh-change", *LF, "--layer", "a=A", "--layer", "b=B", *YES,
+                     "--based-on", "0")
+    code2, msg2 = plan("fresh-change", *LF, "--layer", "b=@1", "--layer", "a=@1", *YES,
+                       "--based-on", "1")
+    report("before anything is generated, a plan change builds nothing",
+           code == code2 == 0 and not list((out / "fresh-change").glob("v[0-9]*"))
+           and "builds its Combined Image" not in msg2, msg2)
 
     if exhaustive:
         explore_scene_states(tmp, report)

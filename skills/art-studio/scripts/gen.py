@@ -602,7 +602,42 @@ def check_layer_inputs(attachments: list[tuple[Path, str]], scene_dir: Path, pla
         md5s[path] = md5(path)
     start = (scene_state.holds(scene_state.classify(scene_dir, targets[0]), layer)
              if layer and targets else None)
+    # SR-5.5: no image holding another version of this Layer, so a version the User
+    # may have rejected never feeds the next one; a fresh generation attaches none
+    for path, _ in attachments if layer else []:
+        what = scene_state.classify(scene_dir, path)
+        if what and what["kind"] == "other":
+            raise Fail(f"{rel_of(path)} lies in the scene's folder but isn't one of its Layer "
+                       "Versions, Combined Images, Drafts or adjusted copies with a sidecar "
+                       "(final.png, final-layers/ and raw.png are copies), so which Layer "
+                       "versions it holds can't be checked: attach the record it copies.")
+        held = scene_state.holds(what, layer)
+        if held is not None and (start is None or held.resolve() != start.resolve()):
+            raise Fail(f"{rel_of(path)} holds Layer {layer}'s {held.name}, but this generation "
+                       + (f"starts from {start.name}" if start else "is fresh (no EDIT TARGET "
+                          "holds a version of it)")
+                       + f": a Layer generation attaches no image holding another version of "
+                       "its Layer. Attach a Combined Image or Draft without it, or edit "
+                       "from that version.")
     return md5s, start
+
+
+def check_starting_version(scene_dir: Path, plan: dict, layer: str, start: Path) -> str | None:
+    """SR-5.4: a warning, naming both, when the starting version isn't the Layer's
+    Default Version. A warning, not a refusal: a retry within one step reuses the
+    step's starting version after a failed generation became the Layer's latest."""
+    try:
+        records = scene_state.read_journal(scene_dir)
+    except scene_state.Fail as e:
+        raise Fail(str(e)) from None
+    versions = scene_state.layer_versions(scene_dir, layer, plan, deleted_numbers, identify)
+    st = scene_state.layer_state(scene_state.journal_view(records), layer, versions)
+    if st["default"] is not None and st["default"]["dir"].resolve() == start.resolve():
+        return None
+    return (f"the starting version, {layer} {start.name}, isn't Layer {layer}'s Default "
+            "Version (" + (f"{st['default']['name']}, {st['default_why']}" if st["default"]
+                           else "none") + "): revise from the Default Version, unless this "
+            "retries a step that started from it")
 
 
 # ------------------------------------------------------------- Layer outputs
@@ -740,6 +775,52 @@ def make_layer_version(out: Path, frame: dict, checked: bool,
         if repair:
             lines.append(f"Repair: {repair}")
     return lines, failures, fits
+
+
+def merge_masked(out: Path, start: Path, mask: Path, frame: dict,
+                 checked: bool) -> tuple[list[str], list[str], bool]:
+    """SR-6.5: turn out/raw.png, a masked Layer generation's paid output, into
+    out/image.png: the starting version with new colour inside the mask, keeping its
+    alpha everywhere and every pixel outside the mask. The API saw the starting
+    version premultiplied onto black, so the new colour is the paid colour divided by
+    the starting alpha where that is above 0, clamped to 1; in a feathered edge it is
+    mixed with the starting colour by the mask's value. Returns what
+    make_layer_version returns."""
+    raw, image = out / "raw.png", out / "image.png"
+    (rw, rh), (sw, sh) = identify(raw), identify(start)
+    if not scene_state.ratio_matches((rw, rh), {"width": sw, "height": sh}):
+        lines, failures, fits = make_layer_version(out, frame, checked, False)
+        return lines + ["Repair: none; the paid output's aspect ratio doesn't match the "
+                        "starting version's, so it wasn't merged"], failures, fits
+    lines, failures = [f"Raw size: {rw}x{rh}"], []
+    with tempfile.TemporaryDirectory(prefix="gen-merge-") as tmp:
+        paid, merged = raw, Path(tmp) / "merged.png"
+        if (rw, rh) != (sw, sh):
+            paid = Path(tmp) / "paid.png"
+            magick(raw, "-resize", f"{sw}x{sh}!", paid)
+            lines.append(f"Scale: x {sw / rw:.4f}, y {sh / rh:.4f} (-resize {sw}x{sh}!), "
+                         "the paid output to the starting version's size")
+        else:
+            lines.append("Scale: none; already the starting version's size")
+        # -fx reads a missing alpha channel wrongly, so every input gets one first; a
+        # grey start would leave -fx one colour channel, so it is read as sRGB
+        magick("(", start, "-colorspace", "sRGB", ")", "(", paid, "-alpha", "off", ")",
+               "(", mask, "-alpha", "off", "-colorspace", "Gray", ")", "-alpha", "set",
+               "-channel", "RGB", "-fx", "wm=u[2].r; u.a>0 ? (1-wm)*u+wm*min(1,v/u.a) : u",
+               "+channel", "-define", "png:color-type=6", merged)
+        if checked:
+            failures = separation_checks(merged, False)
+            lines.append(f"Checks: round 1, merged Layer Version: {' '.join(failures) or 'pass'}")
+        else:
+            lines.append("Checks: not run; the bottom Layer's prompt lacks the "
+                         "transparent-background block")
+        shutil.copyfile(merged, image)
+    lines.append(f"Repair: masked repaint (path 4) merged as colour only: inside the mask, "
+                 f"the paid colour divided by the starting version's alpha where above 0, "
+                 "clamped to 1, mixed with the starting colour by the mask's value; the "
+                 f"starting version's alpha kept everywhere, and every pixel outside the "
+                 f"mask; paid output kept as raw.png")
+    return lines, failures, scene_state.ratio_matches((sw, sh), frame)
 
 
 def flatten_onto_black(src: Path, dest: Path) -> None:
@@ -1206,6 +1287,10 @@ def main() -> int:
     if args.emissive and not args.layer:
         raise Fail("--emissive marks a Layer generation whose content is light only; "
                    "it needs --layer")
+    if args.emissive and args.mask:
+        raise Fail("--emissive has no meaning on a masked Layer generation (path 4): it keeps "
+                   "the starting version's alpha and repaints colour only, so nothing is "
+                   "unmultiplied.")
     size_given = args.size
 
     # --size, --flatten and --max-mb default to None so that "the user passed this"
@@ -1284,10 +1369,6 @@ def main() -> int:
                            "--size.")
         else:
             args.size = frame
-        if args.layer and args.mask:
-            raise Fail("--mask on a Layer generation (path 4) needs the starting version's "
-                       "alpha kept, which this gen.py can't do yet. Use path 3: regenerate "
-                       "the Layer and composite the fixed region onto it.")
         base = writable_base(scene_dir / "layers" / args.layer if args.layer
                              else scene_dir / "drafts")
         deleted = deleted_numbers(base)
@@ -1301,10 +1382,25 @@ def main() -> int:
                    "scene's image, used for placement, scale and light.")
     md5s, start = (check_layer_inputs(attachments, scene_dir, plan, args.layer)
                    if layered else ({}, None))
+    masked_layer = bool(args.layer and args.mask and args.backend == "api")
+    target = masked_layer and attachments and scene_state.classify(scene_dir, attachments[0][0])
+    if masked_layer and not (target and target["kind"] == "layer"
+                             and target["layer"] == args.layer):
+        raise Fail(f"a masked Layer generation (path 4) repaints its starting version itself: "
+                   f"attach a version of Layer {args.layer} (layers/{args.layer}/vNNN/image.png) "
+                   "as image 1, EDIT TARGET, not a Combined Image or adjusted copy.")
     check_style_frozen()
     warnings = check_prompt(prompt, masked=bool(args.mask and args.backend == "api"))
+    if args.layer and start is not None and \
+            (w := check_starting_version(scene_dir, plan, args.layer, start)):
+        warnings.append(w)
     checked = norm(TRANSPARENT_LEAD) in norm(prompt)
-    if args.layer and not checked and args.layer != plan["layers"][0]["id"]:
+    bottom = layered and args.layer == plan["layers"][0]["id"]
+    if masked_layer:
+        # checked on its merged Layer Version, which keeps the starting version's
+        # alpha, so it needs no block; a bottom Layer filling the Frame isn't checked
+        checked = checked or not bottom
+    elif args.layer and not checked and not bottom:
         warnings.append(f"the prompt lacks the transparent-background block (prompt.py "
                         f"--opaque/--soft), and {args.layer} isn't the scene's bottom "
                         "Layer: it may come back opaque and hide every Layer beneath it, "
@@ -1435,7 +1531,8 @@ def main() -> int:
 
     rw, rh = identify(raw)
     head, output = (layer_receipt(out, args, plan, checked, start, to_flatten, attachments,
-                                  warnings) if layered else (None, None))
+                                  warnings, resolve(args.mask) if masked_layer else None)
+                    if layered else (None, None))
     write_receipt(out, args, prompt, attachments, model, usage, warnings,
                   delivered, provenance, f"{rw}x{rh}", head, md5s, output)
     print(f"  wrote {out / 'generation.md'}")
@@ -1443,7 +1540,8 @@ def main() -> int:
 
 
 def layer_receipt(out: Path, args, plan: dict, checked: bool, start: Path | None,
-                  flattened: list[int], attachments, warnings: list[str]):
+                  flattened: list[int], attachments, warnings: list[str],
+                  mask: Path | None = None):
     """Finish a Layer Version or Draft in out/ and return its receipt lines (SRD
     SR-3.8, SR-17.2) and Output line. Prints what the Caller must tell the User."""
     frame = scene_state.frame_text(plan["frame"])
@@ -1463,7 +1561,9 @@ def layer_receipt(out: Path, args, plan: dict, checked: bool, start: Path | None
         head.append(f"md5: {md5(image)}")
         return head, None
 
-    got, failures, fits = make_layer_version(out, plan["frame"], checked, args.emissive)
+    got, failures, fits = (merge_masked(out, start / "image.png", mask, plan["frame"], checked)
+                           if mask is not None else
+                           make_layer_version(out, plan["frame"], checked, args.emissive))
     pick = lambda label: [l for l in got if l.startswith(f"{label}:")]
     head += pick("Raw size") + pick("Scale") + [
         "Starting version: " + (rel_of(start) if start else "none; generated fresh"),

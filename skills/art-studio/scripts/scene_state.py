@@ -664,6 +664,30 @@ def plan_changes(records: list[dict], proposal: dict) -> list[str]:
     return out
 
 
+def plan_effects(records: list[dict], proposal: dict, versions: dict[str, list[dict]]) -> list[str]:
+    """SR-2.4: each Approved Layer Version that the proposal would make stop counting
+    or count again, and each keep it would end. versions holds each Layer's versions
+    (with "entry", "size" and "deleted"), for every Layer ever planned or proposed."""
+    cur = current_plan(records)
+    if not (cur and cur["layered"] and proposal["layered"]):
+        return []
+    now = journal_view(records)
+    after = journal_view(records + [{"number": latest(records) + 1, "kind": "plan",
+                                     **proposal}])
+    out = []
+    for lid, vs in versions.items():
+        was = layer_state(now, lid, assess(vs, lid, cur))
+        will = layer_state(after, lid, assess(vs, lid, proposal))
+        if was["approved"] and was["approved"]["counts"] != will["approved"]["counts"]:
+            out.append(f"Layer {lid}'s Approved Layer Version {was['approved']['name']} "
+                       f"(journal/{was['approval']['number']:03d}.json) would "
+                       + ("stop counting" if was["approved"]["counts"] else "count again"))
+        if was["keep"] and not will["keep"]:
+            out.append(f"the keep of Layer {lid}'s {was['keep']['version']} "
+                       f"(journal/{was['keep']['number']:03d}.json) would end, for good")
+    return out
+
+
 def check_plan(records: list[dict], proposal: dict, has_generated: bool) -> list[str]:
     """Refuse a proposal SR-2.2/2.3 forbids; otherwise return what it changes."""
     if proposal["layered"]:
