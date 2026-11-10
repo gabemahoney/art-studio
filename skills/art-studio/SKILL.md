@@ -115,7 +115,10 @@ must be inside one (any repo works; it is read-only to Codex).
 
 ## Before you start
 
-Confirm the package and, for a scene, the output folder. Read the package's `style.md`
+Confirm the package and, for a scene, the output folder. When the user points to an
+existing image as an example, use the package on the `Package:` line of its receipt
+(`generation.md`), because packages differ in style and the wrong one renders correctly
+in the wrong style. Read the package's `style.md`
 (what the art looks like) and this skill's `rules.md` (how generations run). They
 are the contract; this skill is the procedure. Then confirm which of three jobs you
 are doing — they share one loop and differ only in what goes into steps 1 and 3.
