@@ -3,7 +3,7 @@
 without generating anything.
 
   python3 -I scripts/selftest.py
-  python3 -I scripts/selftest.py --exhaustive   # adds the SR-15.4/16.6 exhaustive
+  python3 -I scripts/selftest.py --exhaustive   # adds the exhaustive state-space
                                                 # tests of the Scene Journal (slow)
 
 Builds a throwaway package and output folder in a temp directory, so it needs no
@@ -1045,7 +1045,7 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
     ok = code == 0 and [(s["layer"], s["path"], s["approved"], s["removed"]) for s in
                         r["stack"]] == [(l, f"output:space/layers/{l}/v001", "no", "no")
                                         for l in ("planet", "asteroids", "ships")]
-    report("combine writes the SR-7.6 receipt and prints each Layer's version",
+    report("combine writes the Combined Image receipt and prints each Layer's version",
            ok and (v2 / "generation.md").read_text().startswith("# space v002\n\nNo image model")
            and r.get("Kind") == "Combined Image" and r.get("Frame") == "192x108"
            and r["stack"][2]["entry"] == "The two ships and their engine glow"
@@ -1503,7 +1503,7 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
            code != 0 and code2 != 0 and "plan unchanged; nothing recorded" in msg
            and "plan unchanged" in msg2 and journal("space") == before, msg + msg2)
 
-    # --- keeps and approvals (SR-8, SR-10): the PRD's bluer planet, keeps ended by an
+    # --- keeps and approvals: a bluer planet, keeps ended by an
     # approval, a Layer Entry change and a removal, then a scene approval and its copies
     def approve(rel: str, *args: str) -> tuple[int, str]:
         return script("promote.py", str(out / rel), *args)
@@ -1626,7 +1626,7 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
            and "      Default Version: v001 (its Approved Layer Version); Approved Layer "
                "Version: v001" in st and "kept: v002" not in st, st_removed + st)
 
-    # SR-2.6 on the way: the Layer Entry change built nothing (asteroids then had no
+    # Combined Images built by plan changes: the Layer Entry change built nothing (asteroids then had no
     # counting version), changing it back, the removal and the put-back each built one
     stacks = {v: [(s["layer"], s["path"][-4:]) for s in receipt(f"{BP}/{v}").get("stack", [])]
               for v in ("v005", "v006", "v007")}
@@ -1885,7 +1885,7 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
     report("a scene named drafts, not layered, promotes as today",
            code == 0 and (out / "drafts/final.png").exists(), msg)
 
-    # --- revising one Layer (SR-5.4, SR-5.5, SR-6): starting versions, fixes recorded
+    # --- revising one Layer: starting versions, fixes recorded
     # with layers.py record, path 3 and a moved ship, and path 4's colour-only merge
     R = "rev"
     plan(R, *LF, "--layer", f"planet={PE}", "--layer", f"asteroids={AE}",
@@ -1946,7 +1946,7 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
                and sorted(tmp.rglob("*")) == before, msg)
 
     def region_replace(start: Path, donor: Path, mask_png: Path, dest: Path) -> str:
-        """SR-6.3: inside the mask, colour and alpha are the mask-weighted mix of the two
+        """Inside the mask, colour and alpha are the mask-weighted mix of the two
         images' premultiplied values; outside it nothing changes."""
         mix = lambda c: f"((1-wm)*u.{c}*u.a+wm*v.{c}*v.a)/max(aa,1e-9)"
         cmd = ["magick", "(", str(start), "-colorspace", "sRGB", ")", "(", str(donor),
@@ -2238,7 +2238,7 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
            "saying the plan isn't recorded", code != 0 and "plan not recorded" in msg
            and "is altered" in msg, msg)
 
-    # --- changing the plan later (SR-2.4, SR-2.6, SR-7.2): the PRD's moon moved and back
+    # --- changing the plan later: a moon Layer moved and back
     MO, PM = "moon", "The planet and its moon"
     plan(MO, *LF, "--layer", f"planet={PM}", "--layer", f"asteroids={AE}",
          "--layer", f"ships={SE}", *YES, "--based-on", "0")                          # 1
@@ -2357,13 +2357,13 @@ def run_checks(tmp: Path, exhaustive: bool = False) -> int:
     if exhaustive:
         explore_scene_states(tmp, report)
     else:
-        print("  (the SR-15.4/16.6 exhaustive tests run with --exhaustive)")
+        print("  (the exhaustive Scene Journal tests run with --exhaustive)")
 
     print(f"\n  {checks - failures}/{checks} checks passed")
     return 1 if failures else 0
 
 
-# --------------------------------------------- SR-15.4: the bounded exhaustive test
+# ------------------------------- Scene Journal state space: the bounded exhaustive test
 
 # Three Layers: a has two Layer Entry texts, and is the one the plan changes remove,
 # put back, change and change back; b and c have one each. Each Layer holds at most
@@ -2391,17 +2391,17 @@ X_TARGETS = (
 
 
 def explore_scene_states(tmp: Path, report) -> None:
-    """SR-15.4. Drives the real scene_state over every state reachable from an empty
+    """Drives the real scene_state over every state reachable from an empty
     scene, each distinct state once, and checks it against a small independent model
-    of SR-8: after every event, SR-16.1 to SR-16.5; for every keep and approval tried,
+    of Layer state: after every event, the Layer state invariants; for every keep and approval tried,
     that the real check accepts exactly what the model allows. Then, from each state
     where a reachability target is first reached, runs every interleaving of two
-    writers' read, check and publish steps on a real journal folder (SR-16.6).
+    writers' read, check and publish steps on a real journal folder.
 
     A model state is (order, ever, versions, approved, kept, scene approved): order is
     ((Layer ID, Layer Entry), ...) bottom first; versions[i] is ((entry, at Frame
     ratio), ...) for X_IDS[i], numbered from 1; approved and kept hold version numbers
-    (0 for none). Two states are the same when they agree on what SR-8 reads."""
+    (0 for none). Two states are the same when they agree on what the Layer state reads."""
     started, problems = time.monotonic(), []
     reached: dict[str, tuple] = {}
 
@@ -2431,7 +2431,7 @@ def explore_scene_states(tmp: Path, report) -> None:
 
     @functools.cache
     def layer_key(vs, approved, kept):
-        """What SR-8 reads of one Layer: its versions at the Frame's aspect ratio in
+        """What the Layer state reads of one Layer: its versions at the Frame's aspect ratio in
         order, the entries of those off it (which never count), and which of the
         former are approved and kept."""
         at = [n for n in range(1, len(vs) + 1) if vs[n - 1][1]]
@@ -2467,7 +2467,7 @@ def explore_scene_states(tmp: Path, report) -> None:
     num = lambda v: v["number"] if v else 0
 
     def agrees(m, assessed, real, where):
-        """The real implementation matches the model, and SR-16.1 holds."""
+        """The real implementation matches the model, and every Default Version counts."""
         for i, lid in enumerate(X_IDS):
             st = real[lid]
             if [v["counts"] for v in assessed[lid]] != [counts(m, i, n) for n in
@@ -2478,10 +2478,10 @@ def explore_scene_states(tmp: Path, report) -> None:
                 bad(f"{where}: Layer {lid} (default, approved, kept) is {got}, the model "
                     f"says {(default(m, i), m[3][i], m[4][i])}")
             if st["default"] is not None and not st["default"]["counts"]:
-                bad(f"{where}: SR-16.1: Layer {lid}'s Default Version doesn't count")
+                bad(f"{where}: Layer {lid}'s Default Version doesn't count")
 
     def candidates(m):
-        """The six kinds of Combined Image approval SR-15.4 names, as stacks."""
+        """The six kinds of Combined Image approval the test tries, as stacks."""
         order = [l for l, _ in m[0]]
         base = [(l, default(m, X_IDS.index(l))) for l in order]
         if not order or any(n == 0 for _, n in base):
@@ -2571,7 +2571,7 @@ def explore_scene_states(tmp: Path, report) -> None:
                     after = scene_state.layer_state(
                         view, other, scene_state.assess(raw2[j], other, view["plan"]))
                     if num(after["default"]) != num(before["default"]):
-                        bad(f"SR-16.5: a new {lid} version changed {other}'s Default Version")
+                        bad(f"a new {lid} version changed {other}'s Default Version")
                 children.append((child, records, raw2))
         # keeps and Layer approvals of every recorded version, counting or not
         for i, lid in enumerate(X_IDS):
@@ -2610,9 +2610,9 @@ def explore_scene_states(tmp: Path, report) -> None:
                         child = (m[0], m[1], m[2], put(m[3], i, n), put(m[4], i, 0), m[5])
                     recs = record(records, kind, **named(lid, n))
                     if kind == "layer-approval" and scene_state.journal_view(recs)["keep"].get(lid):
-                        bad(f"SR-16.2: a keep of {lid} is in force after its approval")
+                        bad(f"a keep of {lid} is in force after its approval")
                     children.append((child, recs, raw))
-        # Combined Image approvals of the six kinds of candidate (SR-16.4)
+        # Combined Image approvals of the six kinds of candidate
         for target, stack in candidates(m):
             events += 1
             first(target, (m, records, raw))
@@ -2629,7 +2629,7 @@ def explore_scene_states(tmp: Path, report) -> None:
                 except scene_state.Fail:
                     took = False
                 if took != want:
-                    bad(f"SR-16.4: state {states}: {target} {stack} "
+                    bad(f"state {states}: {target} {stack} "
                         + ("accepted" if took else "refused") + f" with replace={replace}")
             if not ok:
                 continue
@@ -2641,7 +2641,7 @@ def explore_scene_states(tmp: Path, report) -> None:
             recs = record(records, "scene-approval", combined="output:x/v001", md5="0" * 32,
                           layers=[named(l, n) for l, n in stack])
             if any(scene_state.journal_view(recs)["keep"].get(l) for l, _ in stack):
-                bad("SR-16.2: a keep is in force after a scene approval of its Layer")
+                bad("a keep is in force after a scene approval of its Layer")
             children.append(((m[0], m[1], m[2], approved, kept, True), recs, raw))
         # Layer Plan changes
         for change, order in plan_changes(m):
@@ -2660,10 +2660,10 @@ def explore_scene_states(tmp: Path, report) -> None:
             recs = plan_record(records, order)
             if any(m[4]):
                 # a plan change can end keeps; the state it reaches may have been seen
-                # by a path without them, so check this path's keeps here (SR-8.4)
+                # by a path without them, so check this path's keeps here
                 now = scene_state.journal_view(recs)["keep"]
                 if tuple(int(now[l]["version"][1:]) if l in now else 0 for l in X_IDS) != kept:
-                    bad(f"SR-8.4: state {states}: after a plan change ({change}) the keeps in "
+                    bad(f"state {states}: after a plan change ({change}) the keeps in "
                         f"force are {sorted(now)}, the model says {kept}")
             if change == "remove" and m[3][0] and m[4][0]:
                 # a removed Layer holding an approval and a keep, put back both ways
@@ -2685,31 +2685,31 @@ def explore_scene_states(tmp: Path, report) -> None:
                 seen.add(k)
                 queue.append(child)
     elapsed = time.monotonic() - started
-    report(f"SR-15.4: {states} distinct states and {events} tried decisions explored in "
-           f"{elapsed:.1f} s; the real scene_state agrees with the model, and SR-16.1 to "
-           "SR-16.5 hold after every event", not problems, "\n".join(problems))
+    report(f"Scene Journal state space: {states} distinct states and {events} tried decisions explored in "
+           f"{elapsed:.1f} s; the real scene_state agrees with the model, and the Layer "
+           "state invariants hold after every event", not problems, "\n".join(problems))
     missed = [t for t in X_TARGETS if t not in reached]
-    report(f"SR-15.4: all {len(X_TARGETS)} reachability targets reached", not missed,
+    report(f"Scene Journal state space: all {len(X_TARGETS)} reachability targets reached", not missed,
            "missed: " + "; ".join(missed))
     interleave_writers(tmp, reached, report)
 
 
 def check_put_back(records, raw, put_entry: str, approved_same: bool | None, bad) -> None:
-    """SR-16.3 on a plan record that puts Layer a back: its Approved Layer Version
+    """On a plan record that puts Layer a back: its Approved Layer Version
     counts again exactly when the entry it is put back with says the same as the one
     that version was made under, and no keep recorded before the removal is in force."""
     view = scene_state.journal_view(records)
     st = scene_state.layer_state(view, "a", scene_state.assess(raw[0], "a", view["plan"]))
     if st["keep"] is not None:
-        bad("SR-16.3: a keep recorded before Layer a's removal is in force after it is put back")
+        bad("a keep recorded before Layer a's removal is in force after it is put back")
     if approved_same is not None and (st["approved"] is not None
                                       and st["approved"]["counts"]) != approved_same:
-        bad(f"SR-16.3: Layer a put back with {put_entry!r}: its Approved Layer Version "
+        bad(f"Layer a put back with {put_entry!r}: its Approved Layer Version "
             + ("doesn't count" if approved_same else "counts"))
 
 
 def interleave_writers(tmp: Path, reached: dict, report) -> None:
-    """SR-16.6: from each state where a target was first reached, for every pair of
+    """From each state where a target was first reached, for every pair of
     record kinds (two of one kind included), every interleaving of two writers' read,
     check and publish steps on a real journal folder. Both writers decided on the
     starting state. Each published record must pass its check against the journal as
@@ -2719,7 +2719,7 @@ def interleave_writers(tmp: Path, reached: dict, report) -> None:
     kinds = ("plan", "keep", "layer-approval", "scene-approval")
     steps = [p for p in itertools.permutations([0, 0, 0, 1, 1, 1])]
     orders = sorted(set(steps))   # the 20 interleavings of two three-step writers
-    scene = tmp / "sr-16.6"
+    scene = tmp / "two-writers"
 
     def decide(kind, view, assessed):
         """A decision of this kind the journal allows, or None."""
@@ -2823,7 +2823,7 @@ def interleave_writers(tmp: Path, reached: dict, report) -> None:
                     if (mm := scene_state.RECORD.fullmatch(p.name)) and int(mm.group(1)) > base:
                         p.unlink()
     shutil.rmtree(scene, ignore_errors=True)
-    report(f"SR-16.6: {runs} two-writer interleavings from {len(reached)} target states, in "
+    report(f"Scene Journal writers: {runs} two-writer interleavings from {len(reached)} target states, in "
            f"{time.monotonic() - started:.1f} s: every published record passes its check "
            "against the journal before it, and a moved journal publishes nothing",
            runs > 0 and not problems, "\n".join(problems[:8]))

@@ -602,7 +602,7 @@ def check_layer_inputs(attachments: list[tuple[Path, str]], scene_dir: Path, pla
         md5s[path] = md5(path)
     start = (scene_state.holds(scene_state.classify(scene_dir, targets[0]), layer)
              if layer and targets else None)
-    # SR-5.5: no image holding another version of this Layer, so a version the User
+    # No image holding another version of this Layer, so a version the User
     # may have rejected never feeds the next one; a fresh generation attaches none
     for path, _ in attachments if layer else []:
         what = scene_state.classify(scene_dir, path)
@@ -623,7 +623,7 @@ def check_layer_inputs(attachments: list[tuple[Path, str]], scene_dir: Path, pla
 
 
 def check_starting_version(scene_dir: Path, plan: dict, layer: str, start: Path) -> str | None:
-    """SR-5.4: a warning, naming both, when the starting version isn't the Layer's
+    """A warning, naming both, when the starting version isn't the Layer's
     Default Version. A warning, not a refusal: a retry within one step reuses the
     step's starting version after a failed generation became the Layer's latest."""
     try:
@@ -655,8 +655,8 @@ def fx(path: Path, expr: str, *pre: str) -> float:
 
 
 def separation_checks(img: Path, emissive: bool) -> list[str]:
-    """The SR-4.3 checks on a Layer generation's output, with the rules and starting
-    thresholds of Research b.gr7's `layerlab.py check` (calibration, not limits).
+    """The separation checks on a Layer generation's output, with the rules and starting
+    thresholds of an earlier `layerlab.py check` study (calibration, not limits).
     Returns failure codes; an empty list passes.
 
     The backdrop checks read colour only when alpha is absent or unused (fewer than
@@ -722,7 +722,7 @@ def separation_checks(img: Path, emissive: bool) -> list[str]:
 
 
 def unmultiply(src: Path, dest: Path) -> None:
-    """SR-4.4: light painted onto dark, made transparent. Flattened onto black,
+    """Light painted onto dark, made transparent. Flattened onto black,
     alpha = max(R,G,B), colour = RGB / alpha. Exact for light added over black; never
     for opaque content, which it would make partly transparent."""
     with tempfile.TemporaryDirectory(prefix="gen-unmult-") as tmp:
@@ -779,7 +779,7 @@ def make_layer_version(out: Path, frame: dict, checked: bool,
 
 def merge_masked(out: Path, start: Path, mask: Path, frame: dict,
                  checked: bool) -> tuple[list[str], list[str], bool]:
-    """SR-6.5: turn out/raw.png, a masked Layer generation's paid output, into
+    """Turn out/raw.png, a masked Layer generation's paid output, into
     out/image.png: the starting version with new colour inside the mask, keeping its
     alpha everywhere and every pixel outside the mask. The API saw the starting
     version premultiplied onto black, so the new colour is the paid colour divided by
@@ -824,7 +824,7 @@ def merge_masked(out: Path, start: Path, mask: Path, frame: dict,
 
 
 def flatten_onto_black(src: Path, dest: Path) -> None:
-    """SR-4.5: the model ignores alpha and sees whatever colour lies under it."""
+    """The model ignores alpha and sees whatever colour lies under it."""
     magick(src, "-background", "black", "-alpha", "remove", "-alpha", "off", dest)
 
 
@@ -1134,7 +1134,7 @@ def write_receipt(out: Path, args, prompt, attachments, model, usage, warnings,
                   delivered: str | None = None, provenance: str = "",
                   raw_size: str = "", layered: list[str] | None = None,
                   md5s: dict | None = None, output: str | None = None):
-    """layered: a Layer Version's or Draft's labelled lines (SRD SR-17.2), whose free
+    """layered: a Layer Version's or Draft's labelled lines, whose free
     text, and the request and mode, are written with whitespace collapsed; md5s: each
     same-scene attachment's md5, ending its Inputs line; output: the Output line."""
     label = (args.asset or args.scene).split("/")[-1]
@@ -1554,8 +1554,8 @@ def main() -> int:
 def layer_receipt(out: Path, args, plan: dict, checked: bool, start: Path | None,
                   flattened: list[int], attachments, warnings: list[str],
                   mask: Path | None = None):
-    """Finish a Layer Version or Draft in out/ and return its receipt lines (SRD
-    SR-3.8, SR-17.2) and Output line. Prints what the Caller must tell the User."""
+    """Finish a Layer Version or Draft in out/ and return its receipt lines
+    and Output line. Prints what the Caller must tell the User."""
     frame = scene_state.frame_text(plan["frame"])
     head = [f"Kind: {'Layer Version' if args.layer else 'Draft'}"]
     if args.layer:

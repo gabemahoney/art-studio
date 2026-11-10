@@ -49,8 +49,8 @@ ROLE_HINTS = {
                  "light direction. Do not copy any of its content.",
 }
 
-# The Layer statement and transparent-background block (SRD SR-17.6), in the form
-# Research b.gr7 validated. gen.py recognises a Layer prompt by TRANSPARENT_LEAD,
+# The Layer statement and transparent-background block, in the form testing
+# validated. gen.py recognises a Layer prompt by TRANSPARENT_LEAD,
 # compared after whitespace is collapsed, so this wording is fixed.
 TRANSPARENT_LEAD = (
     "BACKGROUND: TRANSPARENT. Output a PNG with a real alpha channel. Every pixel that "

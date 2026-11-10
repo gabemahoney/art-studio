@@ -159,7 +159,7 @@ def set_status(receipt: Path, status: str) -> bool:
 
 def layered_kind(cand: Path) -> tuple[str, Path, str | None] | None:
     """(kind, scene folder, Layer ID) when cand is a Layer Version, Draft or Combined
-    Image folder of a scene whose current plan is layered (SR-10.1), else None, so a
+    Image folder of a scene whose current plan is layered, else None, so a
     folder that only happens to sit under one named layers/ or drafts/ promotes as
     today. Read before today's candidates/ test."""
     up = cand.parents
@@ -257,7 +257,7 @@ def promote_layered(args, cand: Path, kind: str, scene: Path, lid: str | None) -
 
 
 def sound(cand: Path, rel, records: list[dict] = (), lid: str | None = None) -> None:
-    """SR-1.8: the image being approved exists and is the one its receipt, and any
+    """The image being approved exists and is the one its receipt, and any
     journal record naming it, records."""
     if trouble := scene_state.problem(cand, gen.deleted_numbers):
         raise Fail(f"{rel(cand)} can't be approved: {rel(cand / 'image.png')} is {trouble}; "
@@ -289,7 +289,7 @@ def copy_out(cand: Path, scene: Path, rec: dict) -> None:
 
 def combined_stack(cand: Path, scene: Path, rel) -> list[dict]:
     """The Combined Image's stack from its receipt, each Layer Version checked to be
-    this scene's and to match the md5 the Stack records (SR-1.8)."""
+    this scene's and to match the md5 the Stack records."""
     receipt = scene_state.read_receipt(cand)
     named = rel(cand / "generation.md")
     if receipt.get("Kind") != "Combined Image" or not receipt["stack"]:
@@ -315,7 +315,7 @@ def combined_stack(cand: Path, scene: Path, rel) -> list[dict]:
 
 
 def complete_copies(args, cand: Path, scene: Path, rec: dict, rel) -> int:
-    """SR-10.9: the copies don't match the latest scene approval record, which names
+    """The copies don't match the latest scene approval record, which names
     this Combined Image: complete them from the record, writing no record."""
     if md5(cand / "image.png") != rec["md5"]:
         raise Fail(f"{rel(cand / 'image.png')} is not the md5 {rec['md5']} that "
@@ -340,7 +340,7 @@ def complete_copies(args, cand: Path, scene: Path, rec: dict, rel) -> int:
 
 def write_copies(cand: Path, scene: Path, rec: dict) -> None:
     """final.png, then final-layers/ (built aside and swapped in), then final.md, all
-    from the scene approval record (SR-10.7, SR-10.8)."""
+    from the scene approval record."""
     final = scene / "final.png"
     shutil.copy2(cand / "image.png", final)
     if md5(final) != rec["md5"]:
@@ -377,7 +377,7 @@ def current_umask() -> int:
 
 
 def statuses(cand: Path, scene: Path, rec: dict) -> None:
-    """Each receipt that still awaits evaluation records the approval (SR-10.7)."""
+    """Each receipt that still awaits evaluation records the approval."""
     when, words = rec["date"], f'User approval: "{rec["words"]}"'
     set_status(cand / "generation.md", f"approved and promoted to final.png on {when} "
                f"(journal/{rec['number']:03d}.json). {words}")
